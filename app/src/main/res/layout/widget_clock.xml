@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_clock_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg_dark"
+    android:gravity="center_vertical"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <TextClock
+        android:id="@+id/widget_text_clock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:format12Hour="hh:mm a"
+        android:format24Hour="HH:mm"
+        android:textColor="#FFFFFF"
+        android:textSize="26sp"
+        android:textStyle="bold" />
+
+    <TextClock
+        android:id="@+id/widget_text_date"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:format12Hour="EEE, MMM d"
+        android:format24Hour="EEE, MMM d"
+        android:textColor="#89B4FF"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/widget_clock_sub"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="RR World Clock"
+        android:textColor="#B8C4E0"
+        android:textSize="11sp" />
+</LinearLayout>

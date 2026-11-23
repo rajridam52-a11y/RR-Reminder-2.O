@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">RR Reminder</string>
+    <string name="app_tagline">Your Time. Your Control.</string>
+    <string name="app_founder">Founded by Ridam Raj</string>
+    <string name="widget_next_reminder_name">RR Next Reminder</string>
+    <string name="widget_clock_name">RR World Clock</string>
+    <string name="widget_weather_name">RR Weather</string>
+    <string name="widget_quick_add_name">RR Quick Add</string>
+    <string name="widget_timer_name">RR Timer</string>
+    <string name="channel_reminders_name">Reminders</string>
+    <string name="channel_reminders_desc">Scheduled task and time reminders</string>
+    <string name="channel_alarms_name">Alarms</string>
+    <string name="channel_alarms_desc">High-priority wake and alert alarms</string>
+    <string name="channel_timers_name">Timers</string>
+    <string name="channel_timers_desc">Countdown timer completion alerts</string>
+    <string name="channel_routines_name">Routines &amp; Focus</string>
+    <string name="channel_routines_desc">Focus session and routine step alerts</string>
+    <string name="channel_system_name">System &amp; Location</string>
+    <string name="channel_system_desc">Location arrival/departure and backup notices</string>
+</resources>

@@ -1,0 +1,39 @@
+package com.example.core.notifications
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import com.example.core.database.RRDatabase
+import com.example.widgets.WidgetUpdateHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+class BootAndTimeReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val action = intent.action ?: return
+        if (action in SUPPORTED_ACTIONS) {
+            val pendingResult = goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val appContext = context.applicationContext
+                    val db = RRDatabase.getInstance(appContext)
+                    val scheduler = ReminderAlarmScheduler(appContext)
+                    scheduler.rescheduleAll(db)
+                    WidgetUpdateHelper.updateAllWidgets(appContext)
+                } finally {
+                    pendingResult.finish()
+                }
+            }
+        }
+    }
+
+    companion object {
+        private val SUPPORTED_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+        )
+    }
+}

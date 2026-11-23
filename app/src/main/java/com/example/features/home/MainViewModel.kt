@@ -50,6 +50,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val welcomeDismissed: StateFlow<Boolean> = _welcomeDismissed.asStateFlow()
 
     private val _nowMillis = MutableStateFlow(System.currentTimeMillis())
+    val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
 
     val homeState: StateFlow<HomeUiState> = combine(
         _nowMillis,

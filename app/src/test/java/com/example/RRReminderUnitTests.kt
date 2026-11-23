@@ -141,9 +141,14 @@ class RRReminderUnitTests {
     }
 
     @Test
-    fun `stopwatch, timer formatting, and weather code interpretation`() {
+    fun `stopwatch, timer, real-time clock seconds, and weather code interpretation`() {
         assertEquals("01:05.09", ScheduleCalculator.formatStopwatchMillis(65_090L))
         assertEquals("01:00:00", ScheduleCalculator.formatDurationMillis(3_600_000L))
+        val sampleMillis = ZonedDateTime.of(2026, 11, 23, 14, 5, 9, 0, ZoneId.of("UTC"))
+            .toInstant()
+            .toEpochMilli()
+        assertEquals("14:05:09", ScheduleCalculator.formatTime(sampleMillis, use24Hour = true, zoneId = ZoneId.of("UTC"), includeSeconds = true))
+        assertEquals("14:05", ScheduleCalculator.formatTime(sampleMillis, use24Hour = true, zoneId = ZoneId.of("UTC"), includeSeconds = false))
         assertEquals("Thunderstorm", WeatherCodeInterpreter.describe(95))
         assertNotNull(WeatherCodeInterpreter.severeAlertFor(95, 20.0))
         assertNull(WeatherCodeInterpreter.severeAlertFor(0, 10.0))

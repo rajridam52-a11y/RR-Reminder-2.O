@@ -69,9 +69,11 @@ fun SettingsScreen(
     }
 
     val locPermLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        onSetLocationRemindersEnabled(granted)
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        onSetLocationRemindersEnabled(
+            grants.values.any { it } || PermissionHelper.hasAnyLocationPermission(context),
+        )
     }
 
     val calPermLauncher = rememberLauncherForActivityResult(
@@ -341,7 +343,7 @@ fun SettingsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Location Reminders", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "Periodic battery-conscious coarse location checks only when enabled.",
+                                "Periodic battery-conscious GPS location checks only when enabled.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -349,8 +351,8 @@ fun SettingsScreen(
                         Switch(
                             checked = preferences.locationRemindersEnabled,
                             onCheckedChange = { enable ->
-                                if (enable && !PermissionHelper.hasCoarseLocationPermission(context)) {
-                                    locPermLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                if (enable && !PermissionHelper.hasAnyLocationPermission(context)) {
+                                    locPermLauncher.launch(PermissionHelper.LOCATION_PERMISSIONS)
                                 } else {
                                     onSetLocationRemindersEnabled(enable)
                                 }

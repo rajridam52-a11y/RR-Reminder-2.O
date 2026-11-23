@@ -40,10 +40,8 @@ import com.example.R
 import com.example.core.datastore.UserPreferences
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
-import com.example.features.home.HomeUiState
 import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
-import com.example.ui.components.RRMetricBadge
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.LocalRRExtraColors
@@ -111,7 +109,7 @@ fun SplashScreen() {
 
 @Composable
 fun WelcomePreviewScreen(
-    homeState: HomeUiState,
+    nowMillis: Long,
     preferences: UserPreferences,
     isFirstLaunch: Boolean,
     onContinue: () -> Unit,
@@ -124,7 +122,7 @@ fun WelcomePreviewScreen(
                 Brush.verticalGradient(
                     colors = listOf(
                         MaterialTheme.colorScheme.background,
-                        extra.accentPrimary.copy(alpha = 0.12f),
+                        extra.accentPrimary.copy(alpha = 0.14f),
                         MaterialTheme.colorScheme.background,
                     ),
                 ),
@@ -188,50 +186,40 @@ fun WelcomePreviewScreen(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = ScheduleCalculator.formatTime(homeState.nowMillis, preferences.use24Hour) +
+                    text = ScheduleCalculator.formatTime(
+                        millis = nowMillis,
+                        use24Hour = preferences.use24Hour,
+                        includeSeconds = true,
+                    ) +
                         " • " +
-                        ScheduleCalculator.formatDate(homeState.nowMillis, "EEEE, ${preferences.dateFormatStyle.pattern}"),
+                        ScheduleCalculator.formatDate(nowMillis, "EEEE, ${preferences.dateFormatStyle.pattern}"),
                     style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 RRCard(accentGlow = true) {
-                    Text("Today's Preview", style = MaterialTheme.typography.titleSmall)
+                    Text("Welcome Preview", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        RRMetricBadge(
-                            label = "Reminders",
-                            value = "${homeState.upcomingReminders.size}",
-                            color = extra.accentPrimary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        RRMetricBadge(
-                            label = "Tasks",
-                            value = "${homeState.todayTasks.size}",
-                            color = extra.accentSecondary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        RRMetricBadge(
-                            label = "Habits",
-                            value = "${homeState.activeHabitsCount}",
-                            color = extra.success,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                    WelcomeFeatureHighlightRow(
+                        icon = Icons.Rounded.NotificationsActive,
+                        title = "Smart Reminders & Exact Alarms",
+                        subtitle = "Timezone-safe schedules, snooze controls, and reliable alerts.",
+                        color = extra.accentPrimary,
+                    )
                     Spacer(modifier = Modifier.height(10.dp))
-                    val nextReminderTitle = homeState.upcomingReminders.firstOrNull()?.title
-                    Text(
-                        text = if (nextReminderTitle != null) {
-                            "Next up: $nextReminderTitle"
-                        } else {
-                            "Your schedule is clear and ready for today."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    WelcomeFeatureHighlightRow(
+                        icon = Icons.Rounded.MyLocation,
+                        title = "Live GPS Weather & World Clock",
+                        subtitle = "Real-time forecast from your GPS fix and live global timezones.",
+                        color = extra.accentSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    WelcomeFeatureHighlightRow(
+                        icon = Icons.Rounded.Timer,
+                        title = "Timers, Tasks, Notes & Habits",
+                        subtitle = "Complete daily workspace with local backup and home widgets.",
+                        color = extra.success,
                     )
                 }
             }
@@ -245,10 +233,42 @@ fun WelcomePreviewScreen(
                     .height(54.dp)
                     .testTag("welcome_preview_continue_btn"),
             ) {
-                Text(if (isFirstLaunch) "Set Up RR Reminder" else "Enter Dashboard")
+                Text(if (isFirstLaunch) "Set Up RR Reminder" else "Enter RR Reminder")
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
             }
+        }
+    }
+}
+
+@Composable
+private fun WelcomeFeatureHighlightRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    color: Color,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -265,7 +285,7 @@ fun OnboardingScreen(
     val context = LocalContext.current
 
     var notifGranted by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
-    var locationGranted by remember { mutableStateOf(PermissionHelper.hasCoarseLocationPermission(context)) }
+    var locationGranted by remember { mutableStateOf(PermissionHelper.hasAnyLocationPermission(context)) }
     var exactAlarmGranted by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
 
     val notifLauncher = rememberLauncherForActivityResult(
@@ -273,8 +293,10 @@ fun OnboardingScreen(
     ) { granted -> notifGranted = granted }
 
     val locLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted -> locationGranted = granted }
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        locationGranted = grants.values.any { it } || PermissionHelper.hasAnyLocationPermission(context)
+    }
 
     Box(
         modifier = Modifier
@@ -359,7 +381,7 @@ fun OnboardingScreen(
                             exactAlarmGranted = PermissionHelper.canScheduleExactAlarms(context)
                         },
                         onRequestLocation = {
-                            locLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                            locLauncher.launch(PermissionHelper.LOCATION_PERMISSIONS)
                         },
                     )
                     else -> OnboardingThemePage(
@@ -510,10 +532,10 @@ private fun OnboardingPermissionsPage(
 
         PermissionCard(
             icon = Icons.Rounded.MyLocation,
-            title = "Approximate Weather Location (Optional)",
-            explanation = "Used only when you tap 'Use Location' for Weather or opt into Location Reminders. You can always search cities manually instead.",
+            title = "Real-Time GPS Weather & Location (Optional)",
+            explanation = "Used to fetch live Open-Meteo forecasts for your current GPS location or opt-in Location Reminders. You can always search cities manually instead.",
             isGranted = locationGranted,
-            actionLabel = "Allow Coarse Location",
+            actionLabel = "Allow GPS Location",
             onAction = onRequestLocation,
             testTag = "perm_loc_btn",
         )

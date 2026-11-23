@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.core.database.WeatherCacheEntity
 import com.example.core.database.WorldClockCityEntity
 import com.example.core.di.AppContainer
+import com.example.core.location.LocationFetchResult
 import com.example.core.network.DailyForecastItem
 import com.example.core.network.GeocodingResultDto
 import com.example.core.network.HourlyForecastItem
@@ -17,6 +18,9 @@ import java.time.ZoneId
 data class WeatherUiState(
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
+    val isGpsDisabled: Boolean = false,
+    val isGpsSourced: Boolean = false,
+    val gpsProviderInfo: String? = null,
     val cache: WeatherCacheEntity? = null,
     val hourly: List<HourlyForecastItem> = emptyList(),
     val daily: List<DailyForecastItem> = emptyList(),
@@ -34,19 +38,26 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
 
     private val _isLoading = MutableStateFlow(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
+    private val _isGpsDisabled = MutableStateFlow(false)
+    private val _isGpsSourced = MutableStateFlow(false)
+    private val _gpsProviderInfo = MutableStateFlow<String?>(null)
     private val _cityResults = MutableStateFlow<List<GeocodingResultDto>>(emptyList())
     private val _isSearching = MutableStateFlow(false)
 
     val weatherUiState: StateFlow<WeatherUiState> = combine(
-        _isLoading,
-        _errorMessage,
+        combine(_isLoading, _errorMessage, _isGpsDisabled, _isGpsSourced, _gpsProviderInfo) { loading, err, gpsOff, gpsSrc, gpsInfo ->
+            Tuple5(loading, err, gpsOff, gpsSrc, gpsInfo)
+        },
         container.weatherRepository.weatherCache,
         _cityResults,
         _isSearching,
-    ) { loading, err, cache, cities, searching ->
+    ) { status, cache, cities, searching ->
         WeatherUiState(
-            isLoading = loading,
-            errorMessage = err,
+            isLoading = status.first,
+            errorMessage = status.second,
+            isGpsDisabled = status.third,
+            isGpsSourced = status.fourth,
+            gpsProviderInfo = status.fifth,
             cache = cache,
             hourly = cache?.let { container.weatherRepository.parseHourly(it.hourlyJson) }.orEmpty(),
             daily = cache?.let { container.weatherRepository.parseDaily(it.dailyJson) }.orEmpty(),
@@ -85,7 +96,12 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         }
         viewModelScope.launch {
             val prefs = container.preferencesRepository.getSnapshot()
-            if (prefs.hasSavedWeatherLocation) {
+            if (container.locationHelper.hasLocationPermission() &&
+                container.locationHelper.isGpsEnabled() &&
+                !prefs.hasSavedWeatherLocation
+            ) {
+                fetchWeatherByCurrentLocation()
+            } else if (prefs.hasSavedWeatherLocation) {
                 refreshSavedWeather()
             }
         }
@@ -95,10 +111,19 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         viewModelScope.launch {
             val prefs = container.preferencesRepository.getSnapshot()
             if (!prefs.hasSavedWeatherLocation) {
-                _errorMessage.value = "Select a city or grant location access to load live weather."
+                if (container.locationHelper.hasLocationPermission()) {
+                    fetchWeatherByCurrentLocation()
+                } else {
+                    _errorMessage.value = "Search a city or grant GPS access to load live weather."
+                }
                 return@launch
             }
-            fetchWeatherForCity(prefs.savedWeatherCity, prefs.savedWeatherLat, prefs.savedWeatherLon)
+            fetchWeatherForCity(
+                cityName = prefs.savedWeatherCity,
+                lat = prefs.savedWeatherLat,
+                lon = prefs.savedWeatherLon,
+                fromGps = false,
+            )
         }
     }
 
@@ -106,24 +131,55 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
-            val loc = container.locationHelper.getCurrentLocation()
-            if (loc == null) {
-                _isLoading.value = false
-                _errorMessage.value = "Could not obtain device location. Please search and select a city manually."
-                return@launch
+            _isGpsDisabled.value = false
+            when (val result = container.locationHelper.getCurrentLocationDetailed()) {
+                is LocationFetchResult.Success -> {
+                    val loc = result.location
+                    val providerLabel = buildString {
+                        append(loc.provider?.uppercase() ?: "GPS")
+                        loc.accuracyMeters?.let { append(" (±${it.toInt()}m)") }
+                    }
+                    _gpsProviderInfo.value = providerLabel
+                    fetchWeatherForCity(
+                        cityName = loc.displayName,
+                        lat = loc.latitude,
+                        lon = loc.longitude,
+                        fromGps = true,
+                    )
+                }
+                is LocationFetchResult.PermissionDenied -> {
+                    _isLoading.value = false
+                    _errorMessage.value = "Location permission is required to read your real-time GPS forecast."
+                }
+                is LocationFetchResult.GpsDisabled -> {
+                    _isLoading.value = false
+                    _isGpsDisabled.value = true
+                    _errorMessage.value = "Device GPS / Location Services are turned off. Turn on Location to fetch live local weather."
+                }
+                is LocationFetchResult.Unavailable -> {
+                    _isLoading.value = false
+                    _errorMessage.value = result.reason
+                }
             }
-            fetchWeatherForCity(loc.displayName, loc.latitude, loc.longitude)
         }
     }
 
-    fun fetchWeatherForCity(cityName: String, lat: Double, lon: Double) {
+    fun fetchWeatherForCity(
+        cityName: String,
+        lat: Double,
+        lon: Double,
+        fromGps: Boolean = false,
+    ) {
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
+            _isGpsDisabled.value = false
+            _isGpsSourced.value = fromGps
+            if (!fromGps) _gpsProviderInfo.value = null
             val result = container.weatherRepository.fetchAndCacheWeather(cityName, lat, lon)
             _isLoading.value = false
             result.onFailure { ex ->
-                _errorMessage.value = "Unable to reach weather service (${ex.localizedMessage ?: "Network error"}). Showing last cached data if available."
+                _errorMessage.value = "Unable to reach Open-Meteo weather service (${ex.localizedMessage ?: "Network error"}). Showing last cached data if available."
             }
         }
     }
@@ -169,6 +225,14 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
     fun removeWorldCity(id: Long) {
         viewModelScope.launch { container.database.worldClockDao().deleteCityById(id) }
     }
+
+    private data class Tuple5<A, B, C, D, E>(
+        val first: A,
+        val second: B,
+        val third: C,
+        val fourth: D,
+        val fifth: E,
+    )
 
     companion object {
         private val curatedAndSystemZones: List<BuiltInCityOption> by lazy {

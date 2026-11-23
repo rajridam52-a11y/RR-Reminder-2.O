@@ -113,9 +113,19 @@ object ScheduleCalculator {
         return labels.filterIndexed { idx, _ -> (mask and (1 shl idx)) != 0 }.joinToString(", ")
     }
 
-    fun formatTime(millis: Long, use24Hour: Boolean, zoneId: ZoneId = ZoneId.systemDefault()): String {
+    fun formatTime(
+        millis: Long,
+        use24Hour: Boolean,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+        includeSeconds: Boolean = false,
+    ): String {
         val zdt = Instant.ofEpochMilli(millis).atZone(zoneId)
-        val pattern = if (use24Hour) "HH:mm" else "h:mm a"
+        val pattern = when {
+            use24Hour && includeSeconds -> "HH:mm:ss"
+            use24Hour -> "HH:mm"
+            includeSeconds -> "h:mm:ss a"
+            else -> "h:mm a"
+        }
         return zdt.format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault()))
     }
 

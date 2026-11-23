@@ -113,7 +113,7 @@ fun WorldClockTabContent(
                             )
                         }
                         Text(
-                            text = cityZdt.format(DateTimeFormatter.ofPattern(if (preferences.use24Hour) "HH:mm" else "h:mm a")),
+                            text = cityZdt.format(timeFormatter),
                             style = TabularClockMedium,
                         )
                         IconButton(onClick = { onRemoveCity(city.id) }) {

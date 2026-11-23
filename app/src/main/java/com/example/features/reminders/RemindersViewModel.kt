@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.core.database.ReminderEntity
 import com.example.core.database.ReminderPriority
 import com.example.core.di.AppContainer
+import com.example.core.location.LocationFetchResult
 import com.example.core.location.SimpleLocation
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -61,6 +62,9 @@ class RemindersViewModel(private val container: AppContainer) : ViewModel() {
     private val _capturedLocation = MutableStateFlow<SimpleLocation?>(null)
     val capturedLocation: StateFlow<SimpleLocation?> = _capturedLocation.asStateFlow()
 
+    private val _locationMessage = MutableStateFlow<String?>(null)
+    val locationMessage: StateFlow<String?> = _locationMessage.asStateFlow()
+
     fun setSearchQuery(q: String) { _searchQuery.value = q }
     fun setFilter(filter: ReminderFilter) { _selectedFilter.value = filter }
     fun setCategory(category: String) { _selectedCategory.value = category }
@@ -88,12 +92,28 @@ class RemindersViewModel(private val container: AppContainer) : ViewModel() {
 
     fun captureCurrentLocation() {
         viewModelScope.launch {
-            _capturedLocation.value = container.locationHelper.getCurrentLocation()
+            _locationMessage.value = "Reading GPS fix..."
+            when (val res = container.locationHelper.getCurrentLocationDetailed()) {
+                is LocationFetchResult.Success -> {
+                    _capturedLocation.value = res.location
+                    _locationMessage.value = "Pinned: ${res.location.displayName}"
+                }
+                is LocationFetchResult.PermissionDenied -> {
+                    _locationMessage.value = "Location permission denied."
+                }
+                is LocationFetchResult.GpsDisabled -> {
+                    _locationMessage.value = "Turn on device GPS / Location Services first."
+                }
+                is LocationFetchResult.Unavailable -> {
+                    _locationMessage.value = res.reason
+                }
+            }
         }
     }
 
     fun clearCapturedLocation() {
         _capturedLocation.value = null
+        _locationMessage.value = null
     }
 
     class Factory(private val container: AppContainer) : ViewModelProvider.Factory {

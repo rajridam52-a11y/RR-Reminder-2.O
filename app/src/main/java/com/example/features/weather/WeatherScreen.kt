@@ -1,6 +1,5 @@
 package com.example.features.weather
 
-import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -29,6 +28,7 @@ import com.example.ui.components.RRSearchField
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.TabularClockLarge
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,9 +46,19 @@ fun WeatherScreen(
     var cityQuery by remember { mutableStateOf("") }
 
     val locLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) onUseLocation()
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants.values.any { it } || PermissionHelper.hasAnyLocationPermission(context)) {
+            onUseLocation()
+        }
+    }
+
+    val requestOrFetchGps = {
+        if (PermissionHelper.hasAnyLocationPermission(context)) {
+            onUseLocation()
+        } else {
+            locLauncher.launch(PermissionHelper.LOCATION_PERMISSIONS)
+        }
     }
 
     Scaffold(
@@ -57,22 +67,16 @@ fun WeatherScreen(
                 title = { Text("Weather Center") },
                 actions = {
                     IconButton(
-                        onClick = {
-                            if (PermissionHelper.hasCoarseLocationPermission(context)) {
-                                onUseLocation()
-                            } else {
-                                locLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                            }
-                        },
+                        onClick = requestOrFetchGps,
                         modifier = Modifier.testTag("weather_gps_btn"),
                     ) {
-                        Icon(Icons.Rounded.MyLocation, contentDescription = "Use device location")
+                        Icon(Icons.Rounded.MyLocation, contentDescription = "Use real GPS location")
                     }
                     IconButton(
                         onClick = onRefresh,
                         modifier = Modifier.testTag("weather_refresh_btn"),
                     ) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Refresh weather")
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Refresh live forecast")
                     }
                 },
             )
@@ -96,6 +100,30 @@ fun WeatherScreen(
                     placeholder = "Search city (e.g., London, Tokyo, Seattle)...",
                     testTag = "weather_city_search",
                 )
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilledTonalButton(
+                        onClick = requestOrFetchGps,
+                        modifier = Modifier.testTag("weather_live_gps_chip"),
+                    ) {
+                        Icon(Icons.Rounded.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Live GPS Forecast")
+                    }
+                    if (uiState.isGpsSourced && uiState.gpsProviderInfo != null) {
+                        RRStatusPill(
+                            text = uiState.gpsProviderInfo,
+                            color = extra.success,
+                            icon = Icons.Rounded.GpsFixed,
+                        )
+                    }
+                }
             }
 
             if (uiState.isSearchingCities) {
@@ -137,7 +165,13 @@ fun WeatherScreen(
                         ) {
                             Icon(Icons.Rounded.CloudOff, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                             Text(err, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                            TextButton(onClick = onRefresh) { Text("Retry") }
+                            if (uiState.isGpsDisabled) {
+                                TextButton(onClick = { PermissionHelper.openLocationSettings(context) }) {
+                                    Text("Enable GPS")
+                                }
+                            } else {
+                                TextButton(onClick = onRefresh) { Text("Retry") }
+                            }
                         }
                     }
                 }
@@ -149,15 +183,9 @@ fun WeatherScreen(
                     RREmptyState(
                         icon = Icons.Rounded.WbCloudy,
                         title = "No city selected yet",
-                        subtitle = "Search any city above or tap the location icon to fetch live forecasts from Open-Meteo.",
-                        actionLabel = "Use Current Location",
-                        onActionClick = {
-                            if (PermissionHelper.hasCoarseLocationPermission(context)) {
-                                onUseLocation()
-                            } else {
-                                locLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                            }
-                        },
+                        subtitle = "Tap Live GPS Forecast or search any city above to fetch real-time forecasts from Open-Meteo.",
+                        actionLabel = "Use Live GPS",
+                        onActionClick = requestOrFetchGps,
                     )
                 }
             } else if (cache != null) {
@@ -183,7 +211,7 @@ fun WeatherScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(cache.cityName, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold))
                                 Text(
                                     text = WeatherCodeInterpreter.describe(cache.weatherCode),
@@ -191,7 +219,12 @@ fun WeatherScreen(
                                     color = extra.accentPrimary,
                                 )
                                 Text(
-                                    text = "Updated ${ScheduleCalculator.formatTime(cache.updatedAtMillis, preferences.use24Hour)}",
+                                    text = "Updated ${ScheduleCalculator.formatTime(cache.updatedAtMillis, preferences.use24Hour, includeSeconds = true)} • Open-Meteo",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = String.format(Locale.US, "Coordinates: %.4f, %.4f", cache.latitude, cache.longitude),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

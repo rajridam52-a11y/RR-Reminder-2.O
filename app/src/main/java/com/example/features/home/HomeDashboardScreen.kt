@@ -397,7 +397,11 @@ private fun DailyBriefingHeroCard(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = ScheduleCalculator.formatTime(homeState.nowMillis, preferences.use24Hour),
+                            text = ScheduleCalculator.formatTime(
+                                millis = homeState.nowMillis,
+                                use24Hour = preferences.use24Hour,
+                                includeSeconds = true,
+                            ),
                             style = TabularClockLarge,
                             color = Color.White,
                         )
@@ -660,7 +664,7 @@ private fun WeatherSummaryDashboardCard(
                     } else {
                         Text("Weather Center", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Tap to pick a city or enable location for live forecast",
+                            "Tap to load live GPS weather or search a city",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

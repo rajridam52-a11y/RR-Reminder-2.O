@@ -83,7 +83,7 @@ fun RRAppRoot(
     val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
     val splashDone by mainViewModel.splashFinished.collectAsStateWithLifecycle()
     val welcomeDismissed by mainViewModel.welcomeDismissed.collectAsStateWithLifecycle()
-    val homeState by mainViewModel.homeState.collectAsStateWithLifecycle()
+    val nowMillis by mainViewModel.nowMillis.collectAsStateWithLifecycle()
 
     if (!splashDone) {
         SplashScreen()
@@ -92,7 +92,7 @@ fun RRAppRoot(
 
     if (!welcomeDismissed && initialDestination == null) {
         WelcomePreviewScreen(
-            homeState = homeState,
+            nowMillis = nowMillis,
             preferences = preferences,
             isFirstLaunch = !preferences.onboardingCompleted,
             onContinue = mainViewModel::dismissWelcomePreview,
@@ -270,6 +270,7 @@ private fun RRMainShell(
                         val filter by remindersVm.selectedFilter.collectAsStateWithLifecycle()
                         val cat by remindersVm.selectedCategory.collectAsStateWithLifecycle()
                         val capturedLoc by remindersVm.capturedLocation.collectAsStateWithLifecycle()
+                        val locMessage by remindersVm.locationMessage.collectAsStateWithLifecycle()
 
                         RemindersScreen(
                             reminders = reminders,
@@ -278,6 +279,7 @@ private fun RRMainShell(
                             selectedCategory = cat,
                             preferences = preferences,
                             capturedLocation = capturedLoc,
+                            locationMessage = locMessage,
                             onSearchQueryChange = remindersVm::setSearchQuery,
                             onSelectFilter = remindersVm::setFilter,
                             onSelectCategory = remindersVm::setCategory,

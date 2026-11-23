@@ -53,6 +53,7 @@ fun RemindersScreen(
     selectedCategory: String,
     preferences: UserPreferences,
     capturedLocation: SimpleLocation?,
+    locationMessage: String?,
     onSearchQueryChange: (String) -> Unit,
     onSelectFilter: (ReminderFilter) -> Unit,
     onSelectCategory: (String) -> Unit,
@@ -194,6 +195,7 @@ fun RemindersScreen(
             initial = editingReminder,
             preferences = preferences,
             capturedLocation = capturedLocation,
+            locationMessage = locationMessage,
             onCaptureLocation = onCaptureLocation,
             onDismiss = { showEditor = false },
             onSave = { saved ->
@@ -347,6 +349,7 @@ private fun ReminderEditorDialog(
     initial: ReminderEntity?,
     preferences: UserPreferences,
     capturedLocation: SimpleLocation?,
+    locationMessage: String?,
     onCaptureLocation: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (ReminderEntity) -> Unit,
@@ -412,9 +415,11 @@ private fun ReminderEditorDialog(
     }
 
     val locPermLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) onCaptureLocation()
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants.values.any { it } || PermissionHelper.hasAnyLocationPermission(context)) {
+            onCaptureLocation()
+        }
     }
 
     AlertDialog(
@@ -635,15 +640,22 @@ private fun ReminderEditorDialog(
                         )
                         FilledTonalButton(
                             onClick = {
-                                if (PermissionHelper.hasCoarseLocationPermission(context)) {
+                                if (PermissionHelper.hasAnyLocationPermission(context)) {
                                     onCaptureLocation()
                                 } else {
-                                    locPermLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                    locPermLauncher.launch(PermissionHelper.LOCATION_PERMISSIONS)
                                 }
                             },
                         ) {
                             Text("Pin GPS")
                         }
+                    }
+                    if (!locationMessage.isNullOrBlank()) {
+                        Text(
+                            text = locationMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

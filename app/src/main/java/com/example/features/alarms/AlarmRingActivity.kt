@@ -51,13 +51,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.RRReminderApp
+import com.example.core.datastore.UserPreferences
 import com.example.core.notifications.ReminderAlarmReceiver
 import com.example.core.notifications.ScheduleCalculator
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.RRReminderTheme
 import com.example.ui.theme.TabularClockLarge
-import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 class AlarmRingActivity : ComponentActivity() {
 
@@ -80,13 +83,19 @@ class AlarmRingActivity : ComponentActivity() {
         val label = intent.getStringExtra(EXTRA_LABEL) ?: "Alarm"
         val isTimer = intent.getBooleanExtra(EXTRA_IS_TIMER, false)
         val snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE_MINUTES, 10)
+        val prefsRepo = (application as RRReminderApp).container.preferencesRepository
 
         setContent {
-            RRReminderTheme(themeMode = ThemeMode.DARK) {
+            val prefs by prefsRepo.preferences.collectAsStateWithLifecycle(initialValue = UserPreferences())
+            RRReminderTheme(
+                themeMode = prefs.themeMode,
+                accentPreset = prefs.accentPreset,
+            ) {
                 AlarmRingScreen(
                     label = label,
                     isTimer = isTimer,
                     snoozeMinutes = snoozeMinutes,
+                    use24Hour = prefs.use24Hour,
                     onDismiss = {
                         sendBroadcast(
                             Intent(this, ReminderAlarmReceiver::class.java).apply {
@@ -128,15 +137,18 @@ private fun AlarmRingScreen(
     label: String,
     isTimer: Boolean,
     snoozeMinutes: Int,
+    use24Hour: Boolean,
     onDismiss: () -> Unit,
     onSnooze: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
-        while (true) {
-            nowMs = System.currentTimeMillis()
-            delay(1000L)
+        while (isActive) {
+            val now = System.currentTimeMillis()
+            nowMs = now
+            val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
+            delay(waitMs)
         }
     }
 
@@ -157,7 +169,7 @@ private fun AlarmRingScreen(
                 Brush.verticalGradient(
                     colors = listOf(
                         MaterialTheme.colorScheme.background,
-                        extra.accentPrimary.copy(alpha = 0.18f),
+                        extra.accentPrimary.copy(alpha = 0.22f),
                         MaterialTheme.colorScheme.background,
                     ),
                 ),
@@ -191,7 +203,7 @@ private fun AlarmRingScreen(
                 }
                 Spacer(modifier = Modifier.height(28.dp))
                 Text(
-                    text = ScheduleCalculator.formatTime(nowMs, use24Hour = false),
+                    text = ScheduleCalculator.formatTime(nowMs, use24Hour = use24Hour, includeSeconds = true),
                     style = TabularClockLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                 )

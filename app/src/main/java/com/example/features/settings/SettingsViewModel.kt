@@ -2,30 +2,109 @@ package com.example.features.settings
 
 import android.content.Context
 import android.net.Uri
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.core.datastore.DateFormatStyle
+import com.example.core.datastore.PrimaryClockZone
+import com.example.core.datastore.TimeFormatMode
 import com.example.core.datastore.UserPreferences
 import com.example.core.di.AppContainer
+import com.example.core.firebase.GlobalAppConfig
+import com.example.features.auth.signOutFromGoogle
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
-    val preferences: StateFlow<UserPreferences> = container.preferencesRepository.preferences
+    val preferences: StateFlow<UserPreferences> = container.effectivePreferences
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UserPreferences())
+
+    val remoteConfig: StateFlow<GlobalAppConfig?> = container.remoteGlobalConfig
+
+    private val _nowMillis = MutableStateFlow(container.networkTimeProvider.currentEpochMillis())
+    val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
 
     private val _backupStatus = MutableStateFlow<String?>(null)
     val backupStatus: StateFlow<String?> = _backupStatus.asStateFlow()
+
+    private val _isSavingOwnerConfig = MutableStateFlow(false)
+    val isSavingOwnerConfig: StateFlow<Boolean> = _isSavingOwnerConfig.asStateFlow()
+
+    private val _ownerSaveStatus = MutableStateFlow<String?>(null)
+    val ownerSaveStatus: StateFlow<String?> = _ownerSaveStatus.asStateFlow()
+
+    private val _ownerSaveError = MutableStateFlow<String?>(null)
+    val ownerSaveError: StateFlow<String?> = _ownerSaveError.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            while (isActive) {
+                val now = container.networkTimeProvider.currentEpochMillis()
+                _nowMillis.value = now
+                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
+                delay(waitMs)
+            }
+        }
+    }
+
+    fun currentBaseNetworkMillis(): Long = container.networkTimeProvider.baseNetworkEpochMillis()
+
+    fun publishOwnerConfig(config: GlobalAppConfig) {
+        viewModelScope.launch {
+            _isSavingOwnerConfig.value = true
+            _ownerSaveStatus.value = null
+            _ownerSaveError.value = null
+            val res = container.ownerConfigRepository.saveGlobalConfig(config)
+            _isSavingOwnerConfig.value = false
+            res.onSuccess {
+                _ownerSaveStatus.value = "Published live! All signed-in user apps update automatically."
+            }.onFailure { err ->
+                _ownerSaveError.value = err.localizedMessage ?: "Failed to publish Owner settings."
+            }
+        }
+    }
+
+    fun resetOwnerConfig() {
+        viewModelScope.launch {
+            _isSavingOwnerConfig.value = true
+            _ownerSaveStatus.value = null
+            _ownerSaveError.value = null
+            val res = container.ownerConfigRepository.resetGlobalConfig()
+            _isSavingOwnerConfig.value = false
+            res.onSuccess {
+                _ownerSaveStatus.value = "Owner overrides reset. User apps now use live Google time & local preferences."
+            }.onFailure { err ->
+                _ownerSaveError.value = err.localizedMessage ?: "Failed to reset Owner settings."
+            }
+        }
+    }
+
+    fun clearOwnerMessages() {
+        _ownerSaveStatus.value = null
+        _ownerSaveError.value = null
+    }
+
+    fun signOut(credentialManager: CredentialManager) {
+        signOutFromGoogle(
+            credentialManager = credentialManager,
+            scope = viewModelScope,
+            beforeFirebaseSignOut = {
+                container.clearRemoteOverrides()
+            },
+        )
+    }
 
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { container.preferencesRepository.setThemeMode(mode) }
@@ -33,6 +112,14 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setAccentPreset(preset: AccentPreset) {
         viewModelScope.launch { container.preferencesRepository.setAccentPreset(preset) }
+    }
+
+    fun setPrimaryClockZone(zone: PrimaryClockZone) {
+        viewModelScope.launch { container.preferencesRepository.setPrimaryClockZone(zone) }
+    }
+
+    fun setTimeFormatMode(mode: TimeFormatMode) {
+        viewModelScope.launch { container.preferencesRepository.setTimeFormatMode(mode) }
     }
 
     fun setUse24Hour(use24: Boolean) {
@@ -47,8 +134,19 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.preferencesRepository.setFirstDayOfWeek(day) }
     }
 
+    fun setUseFahrenheit(useFahrenheit: Boolean) {
+        viewModelScope.launch { container.preferencesRepository.setUseFahrenheit(useFahrenheit) }
+    }
+
+    fun setUseMph(useMph: Boolean) {
+        viewModelScope.launch { container.preferencesRepository.setUseMph(useMph) }
+    }
+
     fun setDefaultReminderLead(minutes: Int) {
-        viewModelScope.launch { container.preferencesRepository.setDefaultReminderLead(minutes) }
+        viewModelScope.launch {
+            container.preferencesRepository.setDefaultReminderLead(minutes)
+            container.reminderRepository.rescheduleAllReminders(minutes)
+        }
     }
 
     fun setDefaultAlarmSnooze(minutes: Int) {

@@ -1,6 +1,6 @@
 package com.example.features.focus
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,8 +12,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.core.database.FocusSessionEntity
@@ -24,6 +22,7 @@ import com.example.core.datastore.UserPreferences
 import com.example.core.notifications.ScheduleCalculator
 import com.example.features.productivity.FocusUiState
 import com.example.ui.components.RRCard
+import com.example.ui.components.RRCircularProgressRing
 import com.example.ui.components.RRConfirmDialog
 import com.example.ui.components.RREmptyState
 import com.example.ui.components.RRMetricBadge
@@ -63,14 +62,12 @@ fun FocusAndRoutinesTabContent(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
         ) {
-            // Focus Mode Card
             item {
                 val totalPhaseMs = ((if (focusState.phase == "FOCUS") focusState.focusMinutes else focusState.breakMinutes) * 60_000L).coerceAtLeast(1L)
                 val progress = (focusState.remainingMs.toFloat() / totalPhaseMs.toFloat()).coerceIn(0f, 1f)
                 val ringColor = if (focusState.phase == "FOCUS") extra.accentPrimary else extra.success
-                val trackColor = MaterialTheme.colorScheme.surfaceVariant
 
                 RRCard(accentGlow = focusState.isRunning) {
                     Row(
@@ -91,30 +88,21 @@ fun FocusAndRoutinesTabContent(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(160.dp),
+                            .height(166.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Canvas(modifier = Modifier.size(148.dp)) {
-                            val strokeW = 10.dp.toPx()
-                            drawArc(
-                                color = trackColor,
-                                startAngle = 0f,
-                                sweepAngle = 360f,
-                                useCenter = false,
-                                style = Stroke(width = strokeW, cap = StrokeCap.Round),
-                            )
-                            drawArc(
-                                color = ringColor,
-                                startAngle = -90f,
-                                sweepAngle = 360f * progress,
-                                useCenter = false,
-                                style = Stroke(width = strokeW, cap = StrokeCap.Round),
+                        RRCircularProgressRing(
+                            progress = progress,
+                            size = 152.dp,
+                            strokeWidth = 10.dp,
+                            primaryColor = ringColor,
+                            secondaryColor = if (focusState.phase == "FOCUS") extra.accentSecondary else extra.accentPrimary,
+                        ) {
+                            Text(
+                                text = ScheduleCalculator.formatDurationMillis(focusState.remainingMs),
+                                style = TabularClockLarge.copy(fontSize = MaterialTheme.typography.headlineLarge.fontSize),
                             )
                         }
-                        Text(
-                            text = ScheduleCalculator.formatDurationMillis(focusState.remainingMs),
-                            style = TabularClockLarge.copy(fontSize = MaterialTheme.typography.headlineLarge.fontSize),
-                        )
                     }
                     Spacer(modifier = Modifier.height(14.dp))
                     Row(
@@ -311,6 +299,7 @@ fun FocusAndRoutinesTabContent(
     if (showRoutineEditor) {
         RoutineEditorDialog(
             initial = editingRoutine,
+            preferences = preferences,
             onDismiss = { showRoutineEditor = false },
             onSave = { routine, steps ->
                 onSaveRoutine(routine, steps)
@@ -334,9 +323,11 @@ fun FocusAndRoutinesTabContent(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RoutineEditorDialog(
     initial: RoutineWithSteps?,
+    preferences: UserPreferences,
     onDismiss: () -> Unit,
     onSave: (RoutineEntity, List<Pair<String, Int>>) -> Unit,
 ) {
@@ -345,6 +336,7 @@ private fun RoutineEditorDialog(
     var hour by remember { mutableIntStateOf(initial?.routine?.startHour ?: 7) }
     var minute by remember { mutableIntStateOf(initial?.routine?.startMinute ?: 0) }
     var reminderEnabled by remember { mutableStateOf(initial?.routine?.reminderEnabled ?: false) }
+    var showTimePicker by remember { mutableStateOf(false) }
     var stepTitle by remember { mutableStateOf("") }
     var stepMins by remember { mutableIntStateOf(10) }
     val steps = remember {
@@ -360,7 +352,7 @@ private fun RoutineEditorDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 440.dp)
+                    .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -381,10 +373,29 @@ private fun RoutineEditorDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Daily Reminder (${String.format("%02d:%02d", hour, minute)})")
-                    Switch(checked = reminderEnabled, onCheckedChange = { reminderEnabled = it })
+                    OutlinedButton(onClick = { showTimePicker = true }) {
+                        Icon(Icons.Rounded.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Start: ${ScheduleCalculator.formatHourMinute(hour, minute, preferences.use24Hour)}")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Remind", style = MaterialTheme.typography.bodySmall)
+                        Switch(checked = reminderEnabled, onCheckedChange = { reminderEnabled = it })
+                    }
                 }
-                Text("Routine Steps", style = MaterialTheme.typography.labelMedium)
+                Text("Routine Steps & Duration", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(5, 10, 15, 30).forEach { mins ->
+                        FilterChip(
+                            selected = stepMins == mins,
+                            onClick = { stepMins = mins },
+                            label = { Text("${mins}m") },
+                        )
+                    }
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -436,4 +447,29 @@ private fun RoutineEditorDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+
+    if (showTimePicker) {
+        val timeState = rememberTimePickerState(
+            initialHour = hour,
+            initialMinute = minute,
+            is24Hour = preferences.use24Hour,
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            title = { Text("Routine Start Time") },
+            text = { TimePicker(state = timeState) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        hour = timeState.hour
+                        minute = timeState.minute
+                        showTimePicker = false
+                    },
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
+            },
+        )
+    }
 }

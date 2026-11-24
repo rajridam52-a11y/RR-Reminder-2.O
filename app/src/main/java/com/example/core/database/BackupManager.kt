@@ -7,7 +7,7 @@ import com.squareup.moshi.JsonClass
 @JsonClass(generateAdapter = true)
 data class BackupPayload(
     val app: String = "RR Reminder",
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 2,
     val exportedAtMillis: Long = System.currentTimeMillis(),
     val reminders: List<BackupReminder> = emptyList(),
     val alarms: List<BackupAlarm> = emptyList(),
@@ -17,6 +17,7 @@ data class BackupPayload(
     val routines: List<BackupRoutine> = emptyList(),
     val timerPresets: List<BackupTimerPreset> = emptyList(),
     val worldClockCities: List<BackupWorldCity> = emptyList(),
+    val calendarEvents: List<BackupCalendarEvent> = emptyList(),
 )
 
 @JsonClass(generateAdapter = true)
@@ -118,6 +119,19 @@ data class BackupTimerPreset(val label: String, val durationMillis: Long, val so
 @JsonClass(generateAdapter = true)
 data class BackupWorldCity(val cityName: String, val countryName: String, val zoneId: String, val sortOrder: Int)
 
+@JsonClass(generateAdapter = true)
+data class BackupCalendarEvent(
+    val uuid: String,
+    val title: String,
+    val description: String,
+    val startMillis: Long,
+    val endMillis: Long,
+    val location: String,
+    val category: String,
+    val isAllDay: Boolean,
+    val createdAtMillis: Long,
+)
+
 data class BackupImportResult(
     val importedCount: Int,
     val skippedDuplicatesCount: Int,
@@ -195,6 +209,7 @@ class BackupManager(private val db: RRDatabase) {
             )
         }
         val habitsWithLogs = db.habitDao().getAllSync().map { habit ->
+            val logs = db.habitDao().getLogsForHabitSync(habit.id).map { it.dateEpochDay }
             BackupHabit(
                 uuid = habit.uuid,
                 name = habit.name,
@@ -204,7 +219,7 @@ class BackupManager(private val db: RRDatabase) {
                 weeklyTargetCount = habit.weeklyTargetCount,
                 isPaused = habit.isPaused,
                 isArchived = habit.isArchived,
-                completedEpochDays = emptyList(),
+                completedEpochDays = logs,
             )
         }
         val routines = db.routineDao().getAllSync().map { routine ->
@@ -224,8 +239,22 @@ class BackupManager(private val db: RRDatabase) {
         val cities = db.worldClockDao().getAllSync().map {
             BackupWorldCity(it.cityName, it.countryName, it.zoneId, it.sortOrder)
         }
+        val calendarEvents = db.calendarEventDao().getAllSync().map {
+            BackupCalendarEvent(
+                uuid = it.uuid,
+                title = it.title,
+                description = it.description,
+                startMillis = it.startMillis,
+                endMillis = it.endMillis,
+                location = it.location,
+                category = it.category,
+                isAllDay = it.isAllDay,
+                createdAtMillis = it.createdAtMillis,
+            )
+        }
 
         val payload = BackupPayload(
+            schemaVersion = 2,
             reminders = reminders,
             alarms = alarms,
             tasks = tasks,
@@ -233,6 +262,7 @@ class BackupManager(private val db: RRDatabase) {
             habits = habitsWithLogs,
             routines = routines,
             worldClockCities = cities,
+            calendarEvents = calendarEvents,
         )
         return adapter.toJson(payload)
     }
@@ -241,7 +271,7 @@ class BackupManager(private val db: RRDatabase) {
         return runCatching {
             val payload = adapter.fromJson(rawJson)
                 ?: throw IllegalArgumentException("Backup file is empty or unreadable.")
-            if (payload.app != "RR Reminder" || payload.schemaVersion !in 1..1) {
+            if (payload.app != "RR Reminder" || payload.schemaVersion !in 1..2) {
                 throw IllegalArgumentException("Invalid RR Reminder backup format or unsupported schema version.")
             }
 
@@ -430,6 +460,29 @@ class BackupManager(private val db: RRDatabase) {
                         imported++
                     } else {
                         skipped++
+                    }
+                }
+
+                val eventDao = db.calendarEventDao()
+                payload.calendarEvents.forEach { ev ->
+                    if (ev.title.isBlank()) return@forEach
+                    if (eventDao.getByUuid(ev.uuid) != null) {
+                        skipped++
+                    } else {
+                        eventDao.insert(
+                            CalendarEventEntity(
+                                uuid = ev.uuid,
+                                title = ev.title.trim(),
+                                description = ev.description,
+                                startMillis = ev.startMillis,
+                                endMillis = ev.endMillis,
+                                location = ev.location,
+                                category = ev.category,
+                                isAllDay = ev.isAllDay,
+                                createdAtMillis = ev.createdAtMillis,
+                            ),
+                        )
+                        imported++
                     }
                 }
             }

@@ -12,6 +12,7 @@ import com.example.R
 import com.example.core.database.RRDatabase
 import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.network.WeatherCodeInterpreter
+import com.example.core.network.WeatherUnits
 import com.example.core.notifications.ScheduleCalculator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -90,10 +91,14 @@ class ClockWidgetProvider : AppWidgetProvider() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = RRDatabase.getInstance(context)
+                val prefs = UserPreferencesRepository(context).getSnapshot()
                 val citiesCount = db.worldClockDao().getAllSync().size
+                val now = System.currentTimeMillis()
+                val istTime = ScheduleCalculator.formatTime(now, prefs.use24Hour, ScheduleCalculator.INDIA_ZONE, includeSeconds = false)
+                val istDate = ScheduleCalculator.formatDate(now, "EEE, MMM d", ScheduleCalculator.INDIA_ZONE)
                 appWidgetIds.forEach { id ->
                     val views = RemoteViews(context.packageName, R.layout.widget_clock)
-                    views.setTextViewText(R.id.widget_clock_sub, "$citiesCount world cities tracked")
+                    views.setTextViewText(R.id.widget_clock_sub, "IST $istTime • $istDate ($citiesCount cities)")
                     views.setOnClickPendingIntent(
                         R.id.widget_clock_root,
                         WidgetUpdateHelper.launchMainIntent(context, "worldclock", 502),
@@ -113,11 +118,15 @@ class WeatherWidgetProvider : AppWidgetProvider() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val cache = RRDatabase.getInstance(context).weatherCacheDao().getCacheSync()
+                val prefs = UserPreferencesRepository(context).getSnapshot()
                 appWidgetIds.forEach { id ->
                     val views = RemoteViews(context.packageName, R.layout.widget_weather)
                     if (cache != null) {
                         views.setTextViewText(R.id.widget_weather_city, cache.cityName)
-                        views.setTextViewText(R.id.widget_weather_temp, "${cache.currentTempC.toInt()}°C")
+                        views.setTextViewText(
+                            R.id.widget_weather_temp,
+                            WeatherUnits.formatTemp(cache.currentTempC, prefs.useFahrenheit),
+                        )
                         views.setTextViewText(
                             R.id.widget_weather_cond,
                             WeatherCodeInterpreter.describe(cache.weatherCode),

@@ -4,7 +4,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
-import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
@@ -17,6 +16,8 @@ import com.example.core.database.RRDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -26,12 +27,14 @@ class AlarmForegroundService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private var fadeJob: Job? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private var autoStopJob: Job? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            autoStopJob?.cancel()
             stopAudioAndVibration()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -68,7 +71,8 @@ class AlarmForegroundService : Service() {
         if (vibrate) startVibration()
 
         // Safety auto-stop after 10 minutes to preserve battery
-        serviceScope.launch {
+        autoStopJob?.cancel()
+        autoStopJob = serviceScope.launch {
             delay(10 * 60_000L)
             stopAudioAndVibration()
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -153,7 +157,9 @@ class AlarmForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        autoStopJob?.cancel()
         stopAudioAndVibration()
+        serviceScope.cancel()
         super.onDestroy()
     }
 

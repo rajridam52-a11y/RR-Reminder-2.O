@@ -12,6 +12,8 @@ import java.util.Locale
 
 object ScheduleCalculator {
 
+    val INDIA_ZONE: ZoneId = ZoneId.of("Asia/Kolkata")
+
     /**
      * Computes the next trigger timestamp in epoch millis for a recurring reminder after [afterMillis],
      * respecting time-zone rules and Daylight Saving Time transitions via [ZonedDateTime].

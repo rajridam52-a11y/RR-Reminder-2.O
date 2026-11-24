@@ -37,22 +37,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.UserPreferences
+import com.example.core.network.NetworkTimeSyncStatus
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
+import com.example.ui.components.RRBackgroundContainer
 import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.LocalRRExtraColors
-import com.example.ui.theme.NavyDeep
+import com.example.ui.theme.NavyVoid
 import com.example.ui.theme.TabularClockMedium
 import com.example.ui.theme.ThemeMode
 
 @Composable
 fun SplashScreen() {
     val extra = LocalRRExtraColors.current
-    val scale = remember { Animatable(0.82f) }
+    val scale = remember { Animatable(0.84f) }
     val alpha = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
@@ -66,11 +69,11 @@ fun SplashScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(
-                Brush.verticalGradient(
+                Brush.radialGradient(
                     colors = listOf(
-                        NavyDeep,
-                        extra.accentPrimary.copy(alpha = 0.20f),
-                        NavyDeep,
+                        extra.accentPrimary.copy(alpha = 0.24f),
+                        extra.accentSecondary.copy(alpha = 0.12f),
+                        NavyVoid,
                     ),
                 ),
             )
@@ -84,7 +87,7 @@ fun SplashScreen() {
                 .alpha(alpha.value)
                 .padding(32.dp),
         ) {
-            RRBrandMark(size = 88.dp)
+            RRBrandMark(size = 92.dp)
             Spacer(modifier = Modifier.height(22.dp))
             Text(
                 text = "RR Reminder",
@@ -98,10 +101,10 @@ fun SplashScreen() {
                 color = extra.accentPrimary,
             )
             Spacer(modifier = Modifier.height(14.dp))
-            Text(
-                text = "Founded by Ridam Raj",
-                style = MaterialTheme.typography.labelLarge,
-                color = Color(0xFFB8C7EA),
+            RRStatusPill(
+                text = "Founder: Ridam Raj",
+                color = extra.accentSecondary,
+                icon = Icons.Rounded.Verified,
             )
         }
     }
@@ -112,26 +115,15 @@ fun WelcomePreviewScreen(
     nowMillis: Long,
     preferences: UserPreferences,
     isFirstLaunch: Boolean,
+    timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
     onContinue: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.background,
-                        extra.accentPrimary.copy(alpha = 0.14f),
-                        MaterialTheme.colorScheme.background,
-                    ),
-                ),
-            )
-            .safeDrawingPadding(),
-    ) {
+    RRBackgroundContainer {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .safeDrawingPadding()
                 .widthIn(max = 600.dp)
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
@@ -147,7 +139,7 @@ fun WelcomePreviewScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    RRBrandMark(size = 44.dp)
+                    RRBrandMark(size = 46.dp)
                     Column {
                         Text(
                             text = "RR Reminder",
@@ -185,40 +177,105 @@ fun WelcomePreviewScreen(
                     textAlign = TextAlign.Center,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
+                val primaryZone = preferences.primaryClockZone.toZoneId()
+                val primaryLabel = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) {
+                    "India (IST • UTC+5:30)"
+                } else {
+                    "Local (${primaryZone.id})"
+                }
                 Text(
                     text = ScheduleCalculator.formatTime(
                         millis = nowMillis,
                         use24Hour = preferences.use24Hour,
+                        zoneId = primaryZone,
                         includeSeconds = true,
                     ) +
                         " • " +
-                        ScheduleCalculator.formatDate(nowMillis, "EEEE, ${preferences.dateFormatStyle.pattern}"),
+                        ScheduleCalculator.formatDate(
+                            millis = nowMillis,
+                            pattern = "EEEE, ${preferences.dateFormatStyle.pattern}",
+                            zoneId = primaryZone,
+                        ),
                     style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center,
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                val secondaryZone = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) {
+                    java.time.ZoneId.systemDefault()
+                } else {
+                    ScheduleCalculator.INDIA_ZONE
+                }
+                val showSecondaryIst = preferences.primaryClockZone != PrimaryClockZone.INDIA_IST
+                val syncTag = when {
+                    timeSyncStatus.isSynced -> timeSyncStatus.sourceLabel
+                    timeSyncStatus.isSyncing -> "Syncing Google Time..."
+                    else -> "System Clock"
+                }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = extra.glassFill,
+                    border = BorderStroke(1.dp, extra.accentPrimary.copy(alpha = 0.45f)),
+                    modifier = Modifier.testTag("welcome_india_time_pill"),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.Schedule,
+                            contentDescription = "Clock Timezone",
+                            tint = extra.accentPrimary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = if (showSecondaryIst) {
+                                "India (IST): " +
+                                    ScheduleCalculator.formatTime(
+                                        millis = nowMillis,
+                                        use24Hour = preferences.use24Hour,
+                                        zoneId = ScheduleCalculator.INDIA_ZONE,
+                                        includeSeconds = true,
+                                    ) +
+                                    " • " +
+                                    ScheduleCalculator.formatDate(
+                                        millis = nowMillis,
+                                        pattern = "EEE, ${preferences.dateFormatStyle.pattern}",
+                                        zoneId = ScheduleCalculator.INDIA_ZONE,
+                                    )
+                            } else if (secondaryZone != primaryZone) {
+                                "$primaryLabel • $syncTag"
+                            } else {
+                                "$primaryLabel • $syncTag"
+                            },
+                            style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(16.dp))
                 RRCard(accentGlow = true) {
-                    Text("Welcome Preview", style = MaterialTheme.typography.titleSmall)
+                    Text("Welcome Preview • Aurora UI 2.0", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(10.dp))
                     WelcomeFeatureHighlightRow(
                         icon = Icons.Rounded.NotificationsActive,
                         title = "Smart Reminders & Exact Alarms",
-                        subtitle = "Timezone-safe schedules, snooze controls, and reliable alerts.",
+                        subtitle = "Timezone-safe schedules, snooze controls, lead alerts, and reliable rings.",
                         color = extra.accentPrimary,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     WelcomeFeatureHighlightRow(
                         icon = Icons.Rounded.MyLocation,
                         title = "Live GPS Weather & World Clock",
-                        subtitle = "Real-time forecast from your GPS fix and live global timezones.",
+                        subtitle = "Real-time Open-Meteo forecast from GPS and live global timezones.",
                         color = extra.accentSecondary,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     WelcomeFeatureHighlightRow(
                         icon = Icons.Rounded.Timer,
-                        title = "Timers, Tasks, Notes & Habits",
-                        subtitle = "Complete daily workspace with local backup and home widgets.",
+                        title = "Workspace, Focus & Productivity AI",
+                        subtitle = "Calendar events, tasks, auto-saved notes, habits, timers & widgets.",
                         color = extra.success,
                     )
                 }
@@ -298,21 +355,16 @@ fun OnboardingScreen(
         locationGranted = grants.values.any { it } || PermissionHelper.hasAnyLocationPermission(context)
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .safeDrawingPadding(),
-    ) {
+    RRBackgroundContainer {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .safeDrawingPadding()
                 .widthIn(max = 600.dp)
                 .align(Alignment.Center)
                 .padding(horizontal = 22.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            // Top progress indicator
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -337,7 +389,6 @@ fun OnboardingScreen(
                 }
             }
 
-            // Step Indicators
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -474,7 +525,7 @@ private fun OnboardingWelcomePage() {
                 Column {
                     Text("Private & Offline-First", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Your reminders, tasks, notes, and habits stay safely on your device with optional encrypted-ready JSON backup.",
+                        "Your reminders, tasks, notes, and habits stay safely on your device with optional local JSON backup.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -619,7 +670,7 @@ private fun OnboardingThemePage(
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            text = "Pick your preferred theme and accent color. Transitions stay smooth across every screen.",
+            text = "Pick your preferred theme and Aurora accent color. Transitions stay smooth across every screen.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

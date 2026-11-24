@@ -1,0 +1,99 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwnerAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email == 'rajridam92@gmail.com';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidAppConfig(data) {
+      return data.timeMode in ['GOOGLE_AUTO', 'OFFSET', 'FIXED'] &&
+        data.timeOffsetMinutes is int &&
+        data.timeOffsetMinutes >= -1440 &&
+        data.timeOffsetMinutes <= 1440 &&
+        data.fixedTargetEpochMillis is int &&
+        data.fixedTargetEpochMillis >= 0 &&
+        data.fixedAnchorEpochMillis is int &&
+        data.fixedAnchorEpochMillis >= 0 &&
+        data.syncOverrideEnabled is bool &&
+        data.primaryClockZone in ['', 'india_ist', 'device'] &&
+        data.timeFormatMode in ['', 'system', '12h', '24h'] &&
+        data.dateFormatStyle in ['', 'medium', 'day_month', 'iso', 'slash_us'] &&
+        data.themeMode in ['', 'system', 'dark', 'light'] &&
+        data.accentPreset in ['', 'aurora', 'emerald', 'cobalt', 'violet', 'amber', 'rose'] &&
+        data.weatherTempUnit in ['', 'celsius', 'fahrenheit'] &&
+        data.weatherWindUnit in ['', 'kmh', 'mph'] &&
+        data.bannerEnabled is bool &&
+        data.bannerMessage is string &&
+        data.bannerMessage.size() <= 240 &&
+        data.updatedByEmail is string &&
+        data.updatedByEmail == 'rajridam92@gmail.com' &&
+        data.updatedByEmail.size() <= 120;
+    }
+
+    match /app_config/{configId} {
+      allow get: if isSignedIn() && isValidId(configId) && configId == 'global';
+      allow list: if false;
+
+      allow create: if isOwnerAdmin() &&
+        isValidId(configId) &&
+        configId == 'global' &&
+        incoming().keys().hasAll([
+          'timeMode', 'timeOffsetMinutes', 'fixedTargetEpochMillis', 'fixedAnchorEpochMillis',
+          'syncOverrideEnabled', 'primaryClockZone', 'timeFormatMode', 'dateFormatStyle',
+          'themeMode', 'accentPreset', 'weatherTempUnit', 'weatherWindUnit',
+          'bannerEnabled', 'bannerMessage', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'timeMode', 'timeOffsetMinutes', 'fixedTargetEpochMillis', 'fixedAnchorEpochMillis',
+          'syncOverrideEnabled', 'primaryClockZone', 'timeFormatMode', 'dateFormatStyle',
+          'themeMode', 'accentPreset', 'weatherTempUnit', 'weatherWindUnit',
+          'bannerEnabled', 'bannerMessage', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().createdAt is timestamp &&
+        incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp &&
+        incoming().updatedAt <= request.time &&
+        isValidAppConfig(incoming());
+
+      allow update: if isOwnerAdmin() &&
+        isValidId(configId) &&
+        configId == 'global' &&
+        isValidAppConfig(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp &&
+        incoming().updatedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'timeMode', 'timeOffsetMinutes', 'fixedTargetEpochMillis', 'fixedAnchorEpochMillis',
+          'syncOverrideEnabled', 'primaryClockZone', 'timeFormatMode', 'dateFormatStyle',
+          'themeMode', 'accentPreset', 'weatherTempUnit', 'weatherWindUnit',
+          'bannerEnabled', 'bannerMessage', 'updatedByEmail', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+  }
+}

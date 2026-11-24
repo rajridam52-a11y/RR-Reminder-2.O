@@ -7,6 +7,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -15,17 +18,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Generate debug keystore for debugConfig signing
+      - name: Prepare debug keystore for debugConfig signing
         run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
           if [ ! -f debug.keystore ]; then
             keytool -genkeypair -v \
               -keystore debug.keystore \
@@ -47,12 +53,24 @@ jobs:
         run: gradle :app:testDebugUnitTest --tests "com.example.RRReminderUnitTests" --tests "com.example.ExampleUnitTest"
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug
+        run: |
+          gradle :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk RR-Reminder.apk
 
-      - name: Upload Debug APK
+      - name: Upload APK as Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rr-reminder-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: rr-reminder-apk
+          path: RR-Reminder.apk
           retention-days: 30
           if-no-files-found: error
+
+      - name: Publish APK to GitHub Releases
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: RR Reminder Latest APK
+          body: Automated Android APK build of RR Reminder from GitHub Actions. Download `RR-Reminder.apk` below to install on Android.
+          files: RR-Reminder.apk
+          make_latest: true

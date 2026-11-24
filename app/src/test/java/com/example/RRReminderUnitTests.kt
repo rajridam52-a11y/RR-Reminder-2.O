@@ -1,13 +1,30 @@
 package com.example
 
 import com.example.core.common.VoiceReminderParser
+import com.example.core.database.BackupCalendarEvent
+import com.example.core.database.BackupHabit
 import com.example.core.database.BackupPayload
 import com.example.core.database.BackupReminder
 import com.example.core.database.ReminderEntity
 import com.example.core.database.RepeatType
+import com.example.core.datastore.DateFormatStyle
+import com.example.core.datastore.PrimaryClockZone
+import com.example.core.datastore.TimeFormatMode
+import com.example.core.datastore.UserPreferences
+import com.example.core.firebase.GlobalAppConfig
+import com.example.core.firebase.OWNER_ADMIN_EMAIL
+import com.example.core.firebase.isOwnerUser
+import com.example.core.firebase.resolveEffectivePreferences
+import com.example.core.network.HourlyForecastItem
 import com.example.core.network.NetworkModule
+import com.example.core.network.NetworkTimeProvider
+import com.example.core.network.OwnerTimeOverride
 import com.example.core.network.WeatherCodeInterpreter
+import com.example.core.network.WeatherUnits
 import com.example.core.notifications.ScheduleCalculator
+import com.example.ui.theme.AccentPreset
+import com.example.ui.theme.Purple80
+import com.example.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -17,6 +34,7 @@ import org.junit.Test
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.util.Locale
 
 class RRReminderUnitTests {
 
@@ -89,6 +107,43 @@ class RRReminderUnitTests {
     }
 
     @Test
+    fun `one-time alarm past today rolls over to tomorrow and countdown delta formats accurately`() {
+        val zone = ZoneId.of("UTC")
+        val now = ZonedDateTime.of(2026, 11, 23, 18, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val nextMs = ScheduleCalculator.computeNextAlarmTrigger(
+            hour = 7,
+            minute = 30,
+            repeatDaysMask = 0,
+            nowMillis = now,
+            zoneId = zone,
+        )
+        val nextZdt = Instant.ofEpochMilli(nextMs).atZone(zone)
+        assertEquals(24, nextZdt.dayOfMonth)
+        assertEquals(7, nextZdt.hour)
+        assertEquals(30, nextZdt.minute)
+
+        assertEquals("Due now", ScheduleCalculator.formatCountdownDelta(now - 5_000L, now))
+        assertEquals("in < 1m", ScheduleCalculator.formatCountdownDelta(now + 30_000L, now))
+        assertEquals("in 15m", ScheduleCalculator.formatCountdownDelta(now + 15 * 60_000L, now))
+        assertEquals("in 2h 30m", ScheduleCalculator.formatCountdownDelta(now + 150 * 60_000L, now))
+        assertEquals("in 1d 2h", ScheduleCalculator.formatCountdownDelta(now + 26 * 3_600_000L, now))
+    }
+
+    @Test
+    fun `formatHourMinute formats 24h and 12h consistently`() {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.US)
+            assertEquals("14:05", ScheduleCalculator.formatHourMinute(14, 5, use24Hour = true))
+            assertEquals("2:05 PM", ScheduleCalculator.formatHourMinute(14, 5, use24Hour = false))
+            assertEquals("00:09", ScheduleCalculator.formatHourMinute(0, 9, use24Hour = true))
+            assertEquals("12:09 AM", ScheduleCalculator.formatHourMinute(0, 9, use24Hour = false))
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
     fun `voice parser flags ambiguous time and extracts clean title`() {
         val now = ZonedDateTime.of(2026, 11, 23, 10, 0, 0, 0, ZoneId.of("UTC"))
         val ambiguous = VoiceReminderParser.parse("Remind me to call Alex at 5", now)
@@ -105,9 +160,10 @@ class RRReminderUnitTests {
     }
 
     @Test
-    fun `backup payload roundtrip serialization with Moshi`() {
+    fun `backup payload v2 roundtrip serialization with Moshi includes calendar events and habit logs`() {
         val adapter = NetworkModule.moshi.adapter(BackupPayload::class.java)
         val payload = BackupPayload(
+            schemaVersion = 2,
             reminders = listOf(
                 BackupReminder(
                     uuid = "uuid-123",
@@ -131,13 +187,88 @@ class RRReminderUnitTests {
                     createdAtMillis = 1_795_000_000_000L,
                 ),
             ),
+            habits = listOf(
+                BackupHabit(
+                    uuid = "habit-1",
+                    name = "Hydrate",
+                    description = "2L water",
+                    frequencyType = "DAILY",
+                    targetDaysMask = 0b1111111,
+                    weeklyTargetCount = 7,
+                    isPaused = false,
+                    isArchived = false,
+                    completedEpochDays = listOf(20780L, 20781L),
+                ),
+            ),
+            calendarEvents = listOf(
+                BackupCalendarEvent(
+                    uuid = "event-1",
+                    title = "Product Review",
+                    description = "Quarterly sync",
+                    startMillis = 1_800_010_000_000L,
+                    endMillis = 1_800_013_600_000L,
+                    location = "Studio A",
+                    category = "Work",
+                    isAllDay = false,
+                    createdAtMillis = 1_795_000_000_000L,
+                ),
+            ),
         )
         val json = adapter.toJson(payload)
         val decoded = adapter.fromJson(json)
         assertNotNull(decoded)
         assertEquals("RR Reminder", decoded!!.app)
+        assertEquals(2, decoded.schemaVersion)
         assertEquals(1, decoded.reminders.size)
         assertEquals("Pay Electricity Bill", decoded.reminders.first().title)
+        assertEquals(1, decoded.habits.size)
+        assertEquals(listOf(20780L, 20781L), decoded.habits.first().completedEpochDays)
+        assertEquals(1, decoded.calendarEvents.size)
+        assertEquals("Product Review", decoded.calendarEvents.first().title)
+        assertEquals("Studio A", decoded.calendarEvents.first().location)
+    }
+
+    @Test
+    fun `weather units conversions, compass, visibility, UV, and hourly slice work accurately`() {
+        assertEquals(32.0, WeatherUnits.celsiusToFahrenheit(0.0), 0.01)
+        assertEquals(212.0, WeatherUnits.celsiusToFahrenheit(100.0), 0.01)
+        assertEquals(62.14, WeatherUnits.kmhToMph(100.0), 0.1)
+
+        assertEquals("20°C", WeatherUnits.formatTemp(20.4, useFahrenheit = false))
+        assertEquals("69°F", WeatherUnits.formatTemp(20.4, useFahrenheit = true))
+        assertEquals("10 km/h N", WeatherUnits.formatWind(10.0, useMph = false, directionDeg = 0))
+        assertEquals("6 mph E", WeatherUnits.formatWind(10.0, useMph = true, directionDeg = 90))
+        assertEquals("SW", WeatherUnits.degreesToCompass(225))
+        assertEquals("N", WeatherUnits.degreesToCompass(355))
+
+        assertEquals("10.0 km", WeatherUnits.formatVisibility(10_000.0, useMph = false))
+        assertEquals("6.2 mi", WeatherUnits.formatVisibility(10_000.0, useMph = true))
+        assertEquals("--", WeatherUnits.formatVisibility(0.0, useMph = false))
+
+        assertEquals("Low", WeatherUnits.describeUv(1.5))
+        assertEquals("Moderate", WeatherUnits.describeUv(4.0))
+        assertEquals("High", WeatherUnits.describeUv(6.5))
+        assertEquals("Very High", WeatherUnits.describeUv(9.0))
+        assertEquals("Extreme", WeatherUnits.describeUv(11.5))
+
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.US)
+            assertEquals("06:45", WeatherUnits.formatIsoTime("2026-11-23T06:45", use24Hour = true))
+            assertEquals("6:45 AM", WeatherUnits.formatIsoTime("2026-11-23T06:45", use24Hour = false))
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+
+        val nowMs = ZonedDateTime.of(2026, 11, 23, 14, 25, 0, 0, ZoneId.of("UTC")).toInstant().toEpochMilli()
+        val hourly = listOf(
+            HourlyForecastItem("2026-11-23T12:00", 18.0, 10, 1),
+            HourlyForecastItem("2026-11-23T14:00", 20.0, 15, 2),
+            HourlyForecastItem("2026-11-23T15:00", 21.0, 20, 3),
+        )
+        val sliced = WeatherUnits.sliceHourlyFromNow(hourly, "UTC", nowMillis = nowMs, limit = 24)
+        assertEquals(2, sliced.size)
+        assertEquals("2026-11-23T14:00", sliced.first().timeIso)
     }
 
     @Test
@@ -152,5 +283,142 @@ class RRReminderUnitTests {
         assertEquals("Thunderstorm", WeatherCodeInterpreter.describe(95))
         assertNotNull(WeatherCodeInterpreter.severeAlertFor(95, 20.0))
         assertNull(WeatherCodeInterpreter.severeAlertFor(0, 10.0))
+    }
+
+    @Test
+    fun `india real time and date uses Asia Kolkata IST offset accurately across day boundary`() {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.US)
+            assertEquals("Asia/Kolkata", ScheduleCalculator.INDIA_ZONE.id)
+            // 2026-11-23 19:09:22 PST (-08:00) == 2026-11-24 03:09:22 UTC == 2026-11-24 08:39:22 IST (+05:30)
+            val pstMillis = ZonedDateTime.of(2026, 11, 23, 19, 9, 22, 0, ZoneId.of("America/Los_Angeles"))
+                .toInstant()
+                .toEpochMilli()
+            assertEquals(
+                "08:39:22",
+                ScheduleCalculator.formatTime(pstMillis, use24Hour = true, zoneId = ScheduleCalculator.INDIA_ZONE, includeSeconds = true),
+            )
+            assertEquals(
+                "8:39:22 AM",
+                ScheduleCalculator.formatTime(pstMillis, use24Hour = false, zoneId = ScheduleCalculator.INDIA_ZONE, includeSeconds = true),
+            )
+            assertEquals(
+                "Tuesday, Nov 24, 2026",
+                ScheduleCalculator.formatDate(pstMillis, "EEEE, MMM d, yyyy", ScheduleCalculator.INDIA_ZONE),
+            )
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `theme colors and accent presets initialize cleanly without clinit cycles`() {
+        assertEquals(AccentPreset.AURORA, AccentPreset.fromKey(null))
+        assertEquals(ThemeMode.SYSTEM, ThemeMode.fromKey(null))
+        assertEquals(AccentPreset.AURORA.primaryDark, Purple80)
+        assertTrue(AccentPreset.entries.isNotEmpty())
+    }
+
+    @Test
+    fun `network time HTTP Date header parsing and PrimaryClockZone INDIA_IST mapping work accurately`() {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.US)
+            val parsedEpoch = NetworkTimeProvider.parseHttpDateHeader("Tue, 24 Nov 2026 06:23:00 GMT")
+            assertNotNull(parsedEpoch)
+            assertEquals(PrimaryClockZone.INDIA_IST, PrimaryClockZone.fromKey(null))
+            val istZone = PrimaryClockZone.INDIA_IST.toZoneId()
+            assertEquals("Asia/Kolkata", istZone.id)
+            assertEquals("11:53:00 AM", ScheduleCalculator.formatTime(parsedEpoch!!, use24Hour = false, zoneId = istZone, includeSeconds = true))
+            assertEquals("Tuesday, Nov 24, 2026", ScheduleCalculator.formatDate(parsedEpoch, "EEEE, MMM d, yyyy", istZone))
+            assertNull(NetworkTimeProvider.parseHttpDateHeader("invalid-date"))
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `owner verification strictly requires verified rajridam92 gmail address`() {
+        assertEquals("rajridam92@gmail.com", OWNER_ADMIN_EMAIL)
+        assertTrue(isOwnerUser("rajridam92@gmail.com", isEmailVerified = true))
+        assertTrue(isOwnerUser("  RajRidam92@Gmail.com ", isEmailVerified = true))
+        assertFalse(isOwnerUser("rajridam92@gmail.com", isEmailVerified = false))
+        assertFalse(isOwnerUser("otheruser@gmail.com", isEmailVerified = true))
+        assertFalse(isOwnerUser(null, isEmailVerified = true))
+    }
+
+    @Test
+    fun `owner time overrides shift or anchor time smoothly and preference merge updates all user settings`() {
+        var fakeBaseMs = 1_795_000_000_000L
+        val provider = NetworkTimeProvider(
+            okHttpClient = NetworkModule.httpClient,
+            elapsedMsProvider = { 1000L },
+            systemNowMsProvider = { fakeBaseMs },
+        )
+
+        assertEquals(fakeBaseMs, provider.currentEpochMillis())
+
+        provider.setOwnerTimeOverride(
+            OwnerTimeOverride(
+                enabled = true,
+                mode = "OFFSET",
+                offsetMinutes = 90L,
+            ),
+        )
+        assertEquals(fakeBaseMs + (90L * 60_000L), provider.currentEpochMillis())
+
+        val targetFixed = 1_800_000_000_000L
+        val anchorAtPublish = fakeBaseMs
+        provider.setOwnerTimeOverride(
+            OwnerTimeOverride(
+                enabled = true,
+                mode = "FIXED",
+                fixedTargetEpochMillis = targetFixed,
+                fixedAnchorEpochMillis = anchorAtPublish,
+            ),
+        )
+        fakeBaseMs += 15_000L
+        assertEquals(targetFixed + 15_000L, provider.currentEpochMillis())
+
+        provider.clearOwnerTimeOverride()
+        assertEquals(fakeBaseMs, provider.currentEpochMillis())
+
+        val local = UserPreferences(
+            themeMode = ThemeMode.DARK,
+            accentPreset = AccentPreset.AURORA,
+            primaryClockZone = PrimaryClockZone.INDIA_IST,
+            timeFormatMode = TimeFormatMode.H12,
+            use24Hour = false,
+            dateFormatStyle = DateFormatStyle.MEDIUM,
+            useFahrenheit = false,
+            useMph = false,
+        )
+        val disabledRemote = GlobalAppConfig(
+            syncOverrideEnabled = false,
+            themeMode = "light",
+            accentPreset = "rose",
+        )
+        assertEquals(local, resolveEffectivePreferences(local, disabledRemote))
+
+        val activeRemote = GlobalAppConfig(
+            syncOverrideEnabled = true,
+            primaryClockZone = "device",
+            timeFormatMode = "24h",
+            dateFormatStyle = "iso",
+            themeMode = "light",
+            accentPreset = "emerald",
+            weatherTempUnit = "fahrenheit",
+            weatherWindUnit = "mph",
+        )
+        val merged = resolveEffectivePreferences(local, activeRemote)
+        assertEquals(ThemeMode.LIGHT, merged.themeMode)
+        assertEquals(AccentPreset.EMERALD, merged.accentPreset)
+        assertEquals(PrimaryClockZone.DEVICE_LOCAL, merged.primaryClockZone)
+        assertEquals(TimeFormatMode.H24, merged.timeFormatMode)
+        assertTrue(merged.use24Hour)
+        assertEquals(DateFormatStyle.ISO, merged.dateFormatStyle)
+        assertTrue(merged.useFahrenheit)
+        assertTrue(merged.useMph)
     }
 }

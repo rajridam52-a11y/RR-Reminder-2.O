@@ -20,6 +20,7 @@ import com.example.core.database.TimerPresetEntity
 import com.example.core.datastore.UserPreferences
 import com.example.core.notifications.ScheduleCalculator
 import com.example.ui.components.RRCard
+import com.example.ui.components.RRCircularProgressRing
 import com.example.ui.components.RREmptyState
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
@@ -50,7 +51,7 @@ fun TimerTabContent(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
         ) {
             item {
                 RRCard {
@@ -102,24 +103,39 @@ fun TimerTabContent(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column {
-                                Text(timer.label, style = MaterialTheme.typography.titleMedium)
-                                if (timer.isRepeat) {
-                                    RRStatusPill(text = "Auto-repeat", color = extra.info)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                RRCircularProgressRing(
+                                    progress = progress,
+                                    size = 64.dp,
+                                    strokeWidth = 6.dp,
+                                    primaryColor = if (timer.isRunning) extra.accentPrimary else MaterialTheme.colorScheme.primary,
+                                    secondaryColor = extra.accentSecondary,
+                                ) {
+                                    Text(
+                                        text = "${(progress * 100).toInt()}%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Column {
+                                    Text(timer.label, style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = ScheduleCalculator.formatDurationMillis(remaining),
+                                        style = TabularClockMedium,
+                                        color = if (timer.isRunning) extra.accentPrimary else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    if (timer.isRepeat) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        RRStatusPill(text = "Auto-repeat", color = extra.info)
+                                    }
                                 }
                             }
-                            Text(
-                                text = ScheduleCalculator.formatDurationMillis(remaining),
-                                style = TabularClockMedium,
-                                color = if (timer.isRunning) extra.accentPrimary else MaterialTheme.colorScheme.onSurface,
-                            )
                         }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -311,7 +327,7 @@ fun StopwatchTabContent(
             .fillMaxSize()
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 96.dp),
     ) {
         item {
             RRCard(accentGlow = state.isRunning) {
@@ -377,7 +393,6 @@ fun StopwatchTabContent(
             item {
                 Text("Laps (${state.lapsMillis.size})", style = MaterialTheme.typography.titleMedium)
             }
-            // Show newest lap at top while computing exact cumulative split times
             val splitCumulative = mutableListOf<Long>()
             var acc = 0L
             state.lapsMillis.forEach { lap ->

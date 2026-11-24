@@ -1,6 +1,7 @@
 package com.example.core.datastore
 
 import android.content.Context
+import android.text.format.DateFormat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -45,12 +46,41 @@ enum class DateFormatStyle(val key: String, val label: String, val pattern: Stri
     }
 }
 
+enum class TimeFormatMode(val key: String, val label: String) {
+    SYSTEM("system", "System Default"),
+    H12("12h", "12-Hour"),
+    H24("24h", "24-Hour");
+
+    companion object {
+        fun fromKey(key: String?): TimeFormatMode =
+            entries.firstOrNull { it.key == key } ?: SYSTEM
+    }
+}
+
+enum class PrimaryClockZone(val key: String, val label: String) {
+    INDIA_IST("india_ist", "India (IST)"),
+    DEVICE_LOCAL("device", "Device Local");
+
+    fun toZoneId(): java.time.ZoneId =
+        if (this == INDIA_IST) java.time.ZoneId.of("Asia/Kolkata")
+        else java.time.ZoneId.systemDefault()
+
+    companion object {
+        fun fromKey(key: String?): PrimaryClockZone =
+            entries.firstOrNull { it.key == key } ?: INDIA_IST
+    }
+}
+
 data class UserPreferences(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val accentPreset: AccentPreset = AccentPreset.COBALT,
+    val accentPreset: AccentPreset = AccentPreset.AURORA,
+    val primaryClockZone: PrimaryClockZone = PrimaryClockZone.INDIA_IST,
+    val timeFormatMode: TimeFormatMode = TimeFormatMode.SYSTEM,
     val use24Hour: Boolean = false,
     val dateFormatStyle: DateFormatStyle = DateFormatStyle.MEDIUM,
     val firstDayOfWeek: Int = 1, // 1 = Monday, 7 = Sunday
+    val useFahrenheit: Boolean = false,
+    val useMph: Boolean = false,
     val onboardingCompleted: Boolean = false,
     val dashboardWidgetOrder: List<String> = DashboardWidgetId.DEFAULT_ORDER,
     val hiddenDashboardWidgets: Set<String> = emptySet(),
@@ -84,9 +114,13 @@ class UserPreferencesRepository(private val context: Context) {
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_PRESET = stringPreferencesKey("accent_preset")
+        val PRIMARY_CLOCK_ZONE = stringPreferencesKey("primary_clock_zone")
+        val TIME_FORMAT_MODE = stringPreferencesKey("time_format_mode")
         val USE_24_HOUR = booleanPreferencesKey("use_24_hour")
         val DATE_FORMAT = stringPreferencesKey("date_format")
         val FIRST_DAY_OF_WEEK = intPreferencesKey("first_day_of_week")
+        val USE_FAHRENHEIT = booleanPreferencesKey("use_fahrenheit")
+        val USE_MPH = booleanPreferencesKey("use_mph")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val WIDGET_ORDER = stringPreferencesKey("widget_order")
         val HIDDEN_WIDGETS = stringPreferencesKey("hidden_widgets")
@@ -127,12 +161,26 @@ class UserPreferencesRepository(private val context: Context) {
             ?.toSet()
             ?: emptySet()
 
+        val timeFormatMode = prefs[Keys.TIME_FORMAT_MODE]?.let { TimeFormatMode.fromKey(it) }
+            ?: prefs[Keys.USE_24_HOUR]?.let { if (it) TimeFormatMode.H24 else TimeFormatMode.H12 }
+            ?: TimeFormatMode.SYSTEM
+
+        val resolved24Hour = when (timeFormatMode) {
+            TimeFormatMode.SYSTEM -> DateFormat.is24HourFormat(context)
+            TimeFormatMode.H12 -> false
+            TimeFormatMode.H24 -> true
+        }
+
         UserPreferences(
             themeMode = ThemeMode.fromKey(prefs[Keys.THEME_MODE]),
             accentPreset = AccentPreset.fromKey(prefs[Keys.ACCENT_PRESET]),
-            use24Hour = prefs[Keys.USE_24_HOUR] ?: false,
+            primaryClockZone = PrimaryClockZone.fromKey(prefs[Keys.PRIMARY_CLOCK_ZONE]),
+            timeFormatMode = timeFormatMode,
+            use24Hour = resolved24Hour,
             dateFormatStyle = DateFormatStyle.fromKey(prefs[Keys.DATE_FORMAT]),
             firstDayOfWeek = prefs[Keys.FIRST_DAY_OF_WEEK] ?: 1,
+            useFahrenheit = prefs[Keys.USE_FAHRENHEIT] ?: false,
+            useMph = prefs[Keys.USE_MPH] ?: false,
             onboardingCompleted = prefs[Keys.ONBOARDING_DONE] ?: false,
             dashboardWidgetOrder = orderList,
             hiddenDashboardWidgets = hiddenSet,
@@ -170,8 +218,23 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.ACCENT_PRESET] = preset.key }
     }
 
+    suspend fun setPrimaryClockZone(zone: PrimaryClockZone) {
+        context.dataStore.edit { it[Keys.PRIMARY_CLOCK_ZONE] = zone.key }
+    }
+
+    suspend fun setTimeFormatMode(mode: TimeFormatMode) {
+        context.dataStore.edit {
+            it[Keys.TIME_FORMAT_MODE] = mode.key
+            when (mode) {
+                TimeFormatMode.SYSTEM -> it.remove(Keys.USE_24_HOUR)
+                TimeFormatMode.H12 -> it[Keys.USE_24_HOUR] = false
+                TimeFormatMode.H24 -> it[Keys.USE_24_HOUR] = true
+            }
+        }
+    }
+
     suspend fun setUse24Hour(use24: Boolean) {
-        context.dataStore.edit { it[Keys.USE_24_HOUR] = use24 }
+        setTimeFormatMode(if (use24) TimeFormatMode.H24 else TimeFormatMode.H12)
     }
 
     suspend fun setDateFormat(style: DateFormatStyle) {
@@ -180,6 +243,14 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setFirstDayOfWeek(day: Int) {
         context.dataStore.edit { it[Keys.FIRST_DAY_OF_WEEK] = day }
+    }
+
+    suspend fun setUseFahrenheit(useF: Boolean) {
+        context.dataStore.edit { it[Keys.USE_FAHRENHEIT] = useF }
+    }
+
+    suspend fun setUseMph(useMph: Boolean) {
+        context.dataStore.edit { it[Keys.USE_MPH] = useMph }
     }
 
     suspend fun setOnboardingCompleted(done: Boolean) {

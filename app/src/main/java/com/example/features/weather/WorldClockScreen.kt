@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.core.database.WorldClockCityEntity
 import com.example.core.datastore.UserPreferences
+import com.example.core.network.NetworkTimeSyncStatus
 import com.example.ui.components.RRCard
 import com.example.ui.components.RRSearchField
 import com.example.ui.components.RRStatusPill
@@ -31,6 +32,8 @@ fun WorldClockTabContent(
     zoneQuery: String,
     nowMillis: Long,
     preferences: UserPreferences,
+    timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
+    onSyncNetworkTime: () -> Unit = {},
     onZoneQueryChange: (String) -> Unit,
     onAddCity: (BuiltInCityOption) -> Unit,
     onRemoveCity: (Long) -> Unit,
@@ -39,9 +42,12 @@ fun WorldClockTabContent(
     var showAddSheet by remember { mutableStateOf(false) }
 
     val utcZdt = Instant.ofEpochMilli(nowMillis).atZone(ZoneOffset.UTC)
+    val indiaZdt = Instant.ofEpochMilli(nowMillis).atZone(com.example.core.notifications.ScheduleCalculator.INDIA_ZONE)
+    val isIndiaDay = indiaZdt.hour in 6..18
     val timePattern = if (preferences.use24Hour) "HH:mm:ss" else "h:mm:ss a"
     val timeFormatter = DateTimeFormatter.ofPattern(timePattern, Locale.getDefault())
     val dateFormatter = DateTimeFormatter.ofPattern("EEE, ${preferences.dateFormatStyle.pattern}", Locale.getDefault())
+    val fullDateFormatter = DateTimeFormatter.ofPattern("EEEE, ${preferences.dateFormatStyle.pattern}", Locale.getDefault())
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -52,14 +58,63 @@ fun WorldClockTabContent(
             contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
         ) {
             item {
-                RRCard(accentGlow = true) {
+                RRCard(
+                    accentGlow = true,
+                    modifier = Modifier.testTag("worldclock_india_card"),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    "INDIA STANDARD TIME (IST)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = extra.accentPrimary,
+                                )
+                                RRStatusPill(
+                                    text = if (isIndiaDay) "Day" else "Night",
+                                    color = if (isIndiaDay) extra.warning else extra.accentSecondary,
+                                    icon = if (isIndiaDay) Icons.Rounded.WbSunny else Icons.Rounded.NightsStay,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(indiaZdt.format(timeFormatter), style = TabularClockMedium)
+                            Text(
+                                text = "${indiaZdt.format(fullDateFormatter)} • UTC+05:30 • ${if (timeSyncStatus.isSynced) timeSyncStatus.sourceLabel else "Device Clock"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(
+                            onClick = onSyncNetworkTime,
+                            modifier = Modifier.testTag("worldclock_sync_time_btn"),
+                        ) {
+                            Icon(
+                                Icons.Rounded.Sync,
+                                contentDescription = "Sync real time with Google",
+                                tint = extra.accentPrimary,
+                                modifier = Modifier.size(26.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                RRCard {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column {
-                            Text("COORDINATED UNIVERSAL TIME (UTC)", style = MaterialTheme.typography.labelMedium, color = extra.accentPrimary)
+                            Text("COORDINATED UNIVERSAL TIME (UTC)", style = MaterialTheme.typography.labelMedium, color = extra.accentSecondary)
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(utcZdt.format(timeFormatter), style = TabularClockMedium)
                             Text(
@@ -71,7 +126,7 @@ fun WorldClockTabContent(
                         Icon(
                             Icons.Rounded.Public,
                             contentDescription = "UTC Master Clock",
-                            tint = extra.accentPrimary,
+                            tint = extra.accentSecondary,
                             modifier = Modifier.size(34.dp),
                         )
                     }

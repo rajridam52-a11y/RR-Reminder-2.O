@@ -1,6 +1,5 @@
 package com.example.features.reminders
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
@@ -19,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextDecoration
@@ -39,7 +39,6 @@ import com.example.ui.components.RRSearchField
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
 import java.time.Instant
-import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -48,6 +47,7 @@ import java.time.ZonedDateTime
 @Composable
 fun RemindersScreen(
     reminders: List<ReminderEntity>,
+    nowMillis: Long,
     searchQuery: String,
     selectedFilter: ReminderFilter,
     selectedCategory: String,
@@ -63,16 +63,25 @@ fun RemindersScreen(
     onDeleteReminder: (Long) -> Unit,
     onCaptureLocation: () -> Unit,
     onClearCapturedLocation: () -> Unit,
+    onNavigateNotifications: () -> Unit,
 ) {
     var editingReminder by remember { mutableStateOf<ReminderEntity?>(null) }
     var showEditor by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<ReminderEntity?>(null) }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("Smart Reminders") },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 actions = {
+                    IconButton(
+                        onClick = onNavigateNotifications,
+                        modifier = Modifier.testTag("reminders_notif_history_btn"),
+                    ) {
+                        Icon(Icons.Rounded.History, contentDescription = "Notification History")
+                    }
                     IconButton(
                         onClick = {
                             onClearCapturedLocation()
@@ -113,7 +122,6 @@ fun RemindersScreen(
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Filters
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -129,7 +137,6 @@ fun RemindersScreen(
                 }
             }
 
-            // Categories
             val categories = listOf("All", "General", "Work", "Personal", "Health", "Finance")
             Row(
                 modifier = Modifier
@@ -170,11 +177,12 @@ fun RemindersScreen(
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 88.dp),
+                    contentPadding = PaddingValues(bottom = 96.dp),
                 ) {
                     items(reminders, key = { it.id }) { item ->
                         ReminderRowCard(
                             reminder = item,
+                            nowMillis = nowMillis,
                             preferences = preferences,
                             onToggleComplete = { onToggleComplete(item) },
                             onEdit = {
@@ -223,6 +231,7 @@ fun RemindersScreen(
 @Composable
 private fun ReminderRowCard(
     reminder: ReminderEntity,
+    nowMillis: Long,
     preferences: UserPreferences,
     onToggleComplete: () -> Unit,
     onEdit: () -> Unit,
@@ -232,6 +241,8 @@ private fun ReminderRowCard(
     val extra = LocalRRExtraColors.current
     val priority = ReminderPriority.fromName(reminder.priority)
     val repeat = RepeatType.fromName(reminder.repeatType)
+    val targetMs = reminder.snoozedUntilMillis ?: reminder.triggerAtMillis
+    val isOverdue = !reminder.isCompleted && targetMs < nowMillis
     val priorityColor = when (priority) {
         ReminderPriority.URGENT -> MaterialTheme.colorScheme.error
         ReminderPriority.HIGH -> extra.warning
@@ -240,7 +251,10 @@ private fun ReminderRowCard(
     }
     var showSnoozeMenu by remember { mutableStateOf(false) }
 
-    RRCard(onClick = onEdit) {
+    RRCard(
+        onClick = onEdit,
+        accentGlow = isOverdue,
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top,
@@ -269,19 +283,32 @@ private fun ReminderRowCard(
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))
-                val targetMs = reminder.snoozedUntilMillis ?: reminder.triggerAtMillis
                 Text(
                     text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour)}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = extra.accentPrimary,
+                    color = if (isOverdue) MaterialTheme.colorScheme.error else extra.accentPrimary,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    if (isOverdue) {
+                        RRStatusPill(
+                            text = "Overdue",
+                            color = MaterialTheme.colorScheme.error,
+                            icon = Icons.Rounded.WarningAmber,
+                        )
+                    }
                     RRStatusPill(text = priority.label, color = priorityColor)
                     RRStatusPill(text = reminder.category, color = extra.accentSecondary)
+                    if (preferences.defaultReminderLeadMinutes > 0 && !reminder.isCompleted && reminder.snoozedUntilMillis == null) {
+                        RRStatusPill(
+                            text = "${preferences.defaultReminderLeadMinutes}m early",
+                            color = extra.info,
+                            icon = Icons.Rounded.NotificationsActive,
+                        )
+                    }
                     if (repeat != RepeatType.NONE) {
                         RRStatusPill(
                             text = if (repeat == RepeatType.WEEKDAYS) {
@@ -592,7 +619,6 @@ private fun ReminderEditorDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                // Attachment via zero-permission Photo Picker
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -614,7 +640,6 @@ private fun ReminderEditorDialog(
                     }
                 }
 
-                // Location Trigger
                 Text("Location Trigger (Battery-Conscious)", style = MaterialTheme.typography.labelMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("NONE" to "Off", "ARRIVE" to "On Arrive", "DEPART" to "On Depart").forEach { (key, lbl) ->

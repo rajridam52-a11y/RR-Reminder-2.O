@@ -1,0 +1,114 @@
+{
+  "entities": {
+    "AppConfig": {
+      "title": "Global App Config",
+      "description": "Owner-controlled global time, appearance, unit, and announcement configuration synced in real time across signed-in user apps.",
+      "type": "object",
+      "properties": {
+        "timeMode": {
+          "type": "string",
+          "enum": ["GOOGLE_AUTO", "OFFSET", "FIXED"],
+          "description": "Global clock time source mode."
+        },
+        "timeOffsetMinutes": {
+          "type": "integer",
+          "description": "Minutes shift applied to live Google time when timeMode is OFFSET (-1440..1440)."
+        },
+        "fixedTargetEpochMillis": {
+          "type": "integer",
+          "description": "Owner-specified target epoch milliseconds when timeMode is FIXED."
+        },
+        "fixedAnchorEpochMillis": {
+          "type": "integer",
+          "description": "Google/network epoch milliseconds captured when the fixed owner time was published."
+        },
+        "syncOverrideEnabled": {
+          "type": "boolean",
+          "description": "Whether owner remote configuration overrides are currently active for all users."
+        },
+        "primaryClockZone": {
+          "type": "string",
+          "enum": ["", "india_ist", "device"],
+          "description": "Optional global primary clock timezone override."
+        },
+        "timeFormatMode": {
+          "type": "string",
+          "enum": ["", "system", "12h", "24h"],
+          "description": "Optional global time format override."
+        },
+        "dateFormatStyle": {
+          "type": "string",
+          "enum": ["", "medium", "day_month", "iso", "slash_us"],
+          "description": "Optional global date format override."
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["", "system", "dark", "light"],
+          "description": "Optional global theme override."
+        },
+        "accentPreset": {
+          "type": "string",
+          "enum": ["", "aurora", "emerald", "cobalt", "violet", "amber", "rose"],
+          "description": "Optional global accent preset override."
+        },
+        "weatherTempUnit": {
+          "type": "string",
+          "enum": ["", "celsius", "fahrenheit"],
+          "description": "Optional global temperature unit override."
+        },
+        "weatherWindUnit": {
+          "type": "string",
+          "enum": ["", "kmh", "mph"],
+          "description": "Optional global wind speed unit override."
+        },
+        "bannerEnabled": {
+          "type": "boolean",
+          "description": "Whether an owner broadcast banner is shown on the dashboard."
+        },
+        "bannerMessage": {
+          "type": "string",
+          "description": "Broadcast announcement text shown on user dashboards when bannerEnabled is true."
+        },
+        "updatedByEmail": {
+          "type": "string",
+          "description": "Verified owner email that last saved this configuration."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when config was first created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest owner update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "timeMode",
+        "timeOffsetMinutes",
+        "fixedTargetEpochMillis",
+        "fixedAnchorEpochMillis",
+        "syncOverrideEnabled",
+        "primaryClockZone",
+        "timeFormatMode",
+        "dateFormatStyle",
+        "themeMode",
+        "accentPreset",
+        "weatherTempUnit",
+        "weatherWindUnit",
+        "bannerEnabled",
+        "bannerMessage",
+        "updatedByEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/app_config/{configId}": {
+      "schema": "AppConfig",
+      "description": "Global application configuration document ('global') readable by authenticated users and writable exclusively by verified owner rajridam92@gmail.com."
+    }
+  }
+}

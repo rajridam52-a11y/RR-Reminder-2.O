@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -106,9 +107,18 @@ class RRNotificationManager(
         title: String,
         body: String,
         priorityLabel: String,
+        isLeadAlert: Boolean = false,
+        leadMinutes: Int = 0,
+        soundUriString: String? = null,
+        vibrate: Boolean = true,
     ) {
         ensureChannels()
-        logNotification(RRChannels.REMINDERS, title, body, "REMINDER", reminderId)
+        val displayTitle = if (isLeadAlert) "Upcoming in ${leadMinutes}m: $title" else title
+        val displayBody = body.ifBlank {
+            if (isLeadAlert) "Scheduled in $leadMinutes minutes ($priorityLabel) • RR Reminder"
+            else "Priority: $priorityLabel • RR Reminder"
+        }
+        logNotification(RRChannels.REMINDERS, displayTitle, displayBody, "REMINDER", reminderId)
         if (!hasNotificationPermission()) return
 
         val openIntent = PendingIntent.getActivity(
@@ -141,20 +151,27 @@ class RRNotificationManager(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val notification = NotificationCompat.Builder(context, RRChannels.REMINDERS)
+        val builder = NotificationCompat.Builder(context, RRChannels.REMINDERS)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(body.ifBlank { "Priority: $priorityLabel • RR Reminder" })
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body.ifBlank { "Scheduled reminder ($priorityLabel)" }))
+            .setContentTitle(displayTitle)
+            .setContentText(displayBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(openIntent)
             .addAction(0, "Complete", completeIntent)
             .addAction(0, "Snooze 10m", snoozeIntent)
-            .build()
 
-        NotificationManagerCompat.from(context).notify((1000 + reminderId).toInt(), notification)
+        if (!vibrate) {
+            builder.setVibrate(longArrayOf(0L))
+        }
+        soundUriString?.let { raw ->
+            runCatching { Uri.parse(raw) }.getOrNull()?.let { builder.setSound(it) }
+        }
+
+        val notifId = if (isLeadAlert) (15_000 + reminderId).toInt() else (1000 + reminderId).toInt()
+        NotificationManagerCompat.from(context).notify(notifId, builder.build())
     }
 
     fun buildAlarmRingingNotification(

@@ -13,12 +13,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.core.datastore.UserPreferences
 import com.example.core.network.WeatherCodeInterpreter
+import com.example.core.network.WeatherUnits
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
 import com.example.ui.components.RRCard
@@ -35,6 +37,7 @@ import java.util.Locale
 fun WeatherScreen(
     uiState: WeatherUiState,
     preferences: UserPreferences,
+    nowMillis: Long,
     onSearchCity: (String) -> Unit,
     onSelectCity: (String, Double, Double) -> Unit,
     onClearCityResults: () -> Unit,
@@ -62,9 +65,11 @@ fun WeatherScreen(
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("Weather Center") },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 actions = {
                     IconButton(
                         onClick = requestOrFetchGps,
@@ -88,7 +93,7 @@ fun WeatherScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 6.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 96.dp),
         ) {
             item {
                 RRSearchField(
@@ -154,6 +159,24 @@ fun WeatherScreen(
 
             if (uiState.isLoading) {
                 item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+            }
+
+            if (uiState.isShowingCachedData && uiState.cache != null) {
+                item {
+                    RRCard(containerColor = extra.warning.copy(alpha = 0.14f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(Icons.Rounded.CloudQueue, contentDescription = null, tint = extra.warning)
+                            Text(
+                                text = "Showing offline cached forecast from ${ScheduleCalculator.formatTime(uiState.cache.updatedAtMillis, preferences.use24Hour)}.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
             }
 
             uiState.errorMessage?.let { err ->
@@ -230,7 +253,7 @@ fun WeatherScreen(
                                 )
                             }
                             Text(
-                                text = "${cache.currentTempC.toInt()}°C",
+                                text = WeatherUnits.formatTemp(cache.currentTempC, preferences.useFahrenheit),
                                 style = TabularClockLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
@@ -240,9 +263,56 @@ fun WeatherScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            RRMetricBadge("Feels Like", "${cache.feelsLikeC.toInt()}°C", extra.accentPrimary, Modifier.weight(1f))
-                            RRMetricBadge("Humidity", "${cache.humidityPercent}%", extra.info, Modifier.weight(1f))
-                            RRMetricBadge("Wind", "${cache.windKmh.toInt()} km/h", extra.accentSecondary, Modifier.weight(1f))
+                            RRMetricBadge(
+                                label = "Feels Like",
+                                value = WeatherUnits.formatTemp(cache.feelsLikeC, preferences.useFahrenheit),
+                                color = extra.accentPrimary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            RRMetricBadge(
+                                label = "Humidity",
+                                value = "${cache.humidityPercent}%",
+                                color = extra.info,
+                                modifier = Modifier.weight(1f),
+                            )
+                            RRMetricBadge(
+                                label = "Wind",
+                                value = WeatherUnits.formatWind(cache.windKmh, preferences.useMph, cache.windDirectionDeg),
+                                color = extra.accentSecondary,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            RRMetricBadge(
+                                label = "Pressure",
+                                value = if (cache.pressureHpa > 0) "${cache.pressureHpa.toInt()} hPa" else "--",
+                                color = extra.info,
+                                modifier = Modifier.weight(1f),
+                            )
+                            RRMetricBadge(
+                                label = "UV Index",
+                                value = "${String.format(Locale.US, "%.1f", cache.uvIndex)} ${WeatherUnits.describeUv(cache.uvIndex)}",
+                                color = extra.warning,
+                                modifier = Modifier.weight(1f),
+                            )
+                            RRMetricBadge(
+                                label = "Visibility",
+                                value = WeatherUnits.formatVisibility(cache.visibilityMeters, preferences.useMph),
+                                color = extra.accentPrimary,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (cache.precipitationMm > 0.0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            RRStatusPill(
+                                text = "Precipitation: ${String.format(Locale.US, "%.1f", cache.precipitationMm)} mm",
+                                color = extra.info,
+                                icon = Icons.Rounded.WaterDrop,
+                            )
                         }
                         if (cache.sunriseIso.isNotBlank() && cache.sunsetIso.isNotBlank()) {
                             Spacer(modifier = Modifier.height(10.dp))
@@ -251,12 +321,12 @@ fun WeatherScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
                                 Text(
-                                    "Sunrise: ${cache.sunriseIso.substringAfter("T")}",
+                                    "Sunrise: ${WeatherUnits.formatIsoTime(cache.sunriseIso, preferences.use24Hour)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Text(
-                                    "Sunset: ${cache.sunsetIso.substringAfter("T")}",
+                                    "Sunset: ${WeatherUnits.formatIsoTime(cache.sunsetIso, preferences.use24Hour)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -265,10 +335,16 @@ fun WeatherScreen(
                     }
                 }
 
-                if (uiState.hourly.isNotEmpty()) {
+                val upcomingHourly = WeatherUnits.sliceHourlyFromNow(
+                    items = uiState.hourly,
+                    timezoneId = cache.apiTimezone,
+                    nowMillis = nowMillis,
+                    limit = 24,
+                )
+                if (upcomingHourly.isNotEmpty()) {
                     item {
                         RRCard {
-                            Text("Hourly Forecast", style = MaterialTheme.typography.titleMedium)
+                            Text("Hourly Forecast (Next 24h)", style = MaterialTheme.typography.titleMedium)
                             Spacer(modifier = Modifier.height(10.dp))
                             Row(
                                 modifier = Modifier
@@ -276,18 +352,21 @@ fun WeatherScreen(
                                     .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                uiState.hourly.forEach { h ->
+                                upcomingHourly.forEach { h ->
                                     Column(
                                         horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.width(64.dp),
+                                        modifier = Modifier.width(68.dp),
                                     ) {
                                         Text(
-                                            text = h.timeIso.substringAfter("T"),
+                                            text = WeatherUnits.formatIsoTime(h.timeIso, preferences.use24Hour),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
-                                        Text("${h.tempC.toInt()}°", style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            text = WeatherUnits.formatTempShort(h.tempC, preferences.useFahrenheit),
+                                            style = MaterialTheme.typography.titleMedium,
+                                        )
                                         Text(
                                             "${h.rainProbPercent}%",
                                             style = MaterialTheme.typography.labelSmall,
@@ -314,7 +393,12 @@ fun WeatherScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(day.dateIso, style = MaterialTheme.typography.titleSmall)
                                     Text(
-                                        WeatherCodeInterpreter.describe(day.weatherCode),
+                                        buildString {
+                                            append(WeatherCodeInterpreter.describe(day.weatherCode))
+                                            if (day.precipitationSumMm > 0.0) {
+                                                append(" • ${String.format(Locale.US, "%.1f", day.precipitationSumMm)} mm")
+                                            }
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -325,7 +409,7 @@ fun WeatherScreen(
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
-                                    text = "${day.minTempC.toInt()}° / ${day.maxTempC.toInt()}°",
+                                    text = "${WeatherUnits.formatTempShort(day.minTempC, preferences.useFahrenheit)} / ${WeatherUnits.formatTempShort(day.maxTempC, preferences.useFahrenheit)}",
                                     style = MaterialTheme.typography.titleMedium,
                                 )
                             }

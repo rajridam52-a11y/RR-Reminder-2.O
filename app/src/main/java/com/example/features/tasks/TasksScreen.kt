@@ -27,6 +27,9 @@ import com.example.ui.components.RREmptyState
 import com.example.ui.components.RRSearchField
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 @Composable
 fun TasksTabContent(
@@ -106,7 +109,7 @@ fun TasksTabContent(
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 88.dp),
+                    contentPadding = PaddingValues(bottom = 96.dp),
                 ) {
                     items(filtered, key = { it.task.id }) { item ->
                         val priority = ReminderPriority.fromName(item.task.priority)
@@ -139,7 +142,10 @@ fun TasksTabContent(
                                         )
                                     }
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
                                         RRStatusPill(text = priority.label, color = extra.accentPrimary)
                                         RRStatusPill(text = item.task.category, color = extra.accentSecondary)
                                         item.task.dueDateMillis?.let { due ->
@@ -226,18 +232,27 @@ fun TasksTabContent(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TaskEditorDialog(
     initial: TaskWithSubtasks?,
     onDismiss: () -> Unit,
     onSave: (TaskEntity, List<String>) -> Unit,
 ) {
+    val zone = ZoneId.systemDefault()
+    val today = remember { LocalDate.now(zone) }
+    val initialDate = remember(initial) {
+        initial?.task?.dueDateMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+            ?: today.plusDays(1)
+    }
+
     var title by remember { mutableStateOf(initial?.task?.title ?: "") }
     var description by remember { mutableStateOf(initial?.task?.description ?: "") }
     var category by remember { mutableStateOf(initial?.task?.category ?: "Work") }
     var priority by remember { mutableStateOf(ReminderPriority.fromName(initial?.task?.priority)) }
-    var dueOffsetDays by remember { mutableIntStateOf(1) }
+    var selectedDueDate by remember { mutableStateOf(initialDate) }
     var hasDueDate by remember { mutableStateOf(initial?.task?.dueDateMillis != null) }
+    var showDatePicker by remember { mutableStateOf(false) }
     var newSubtask by remember { mutableStateOf("") }
     val subtasks = remember {
         mutableStateListOf<String>().apply {
@@ -252,7 +267,7 @@ private fun TaskEditorDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 440.dp)
+                    .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -305,14 +320,26 @@ private fun TaskEditorDialog(
                     Switch(checked = hasDueDate, onCheckedChange = { hasDueDate = it })
                 }
                 if (hasDueDate) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(0 to "Today", 1 to "Tomorrow", 7 to "Next Week").forEach { (days, lbl) ->
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        listOf(0L to "Today", 1L to "Tomorrow", 7L to "Next Week").forEach { (days, lbl) ->
+                            val targetDate = today.plusDays(days)
                             FilterChip(
-                                selected = dueOffsetDays == days,
-                                onClick = { dueOffsetDays = days },
+                                selected = selectedDueDate == targetDate,
+                                onClick = { selectedDueDate = targetDate },
                                 label = { Text(lbl) },
                             )
                         }
+                    }
+                    OutlinedButton(
+                        onClick = { showDatePicker = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Rounded.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Due: $selectedDueDate")
                     }
                 }
 
@@ -355,7 +382,7 @@ private fun TaskEditorDialog(
             Button(
                 onClick = {
                     val dueMs = if (hasDueDate) {
-                        initial?.task?.dueDateMillis ?: (System.currentTimeMillis() + dueOffsetDays * 86_400_000L)
+                        selectedDueDate.atTime(23, 59).atZone(zone).toInstant().toEpochMilli()
                     } else null
                     val entity = (initial?.task ?: TaskEntity(title = title.trim())).copy(
                         title = title.trim(),
@@ -373,4 +400,28 @@ private fun TaskEditorDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+
+    if (showDatePicker) {
+        val dateState = rememberDatePickerState(
+            initialSelectedDateMillis = selectedDueDate.atStartOfDay(ZoneId.of("UTC")).toInstant().toEpochMilli(),
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        dateState.selectedDateMillis?.let { ms ->
+                            selectedDueDate = Instant.ofEpochMilli(ms).atZone(ZoneId.of("UTC")).toLocalDate()
+                        }
+                        showDatePicker = false
+                    },
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(state = dateState)
+        }
+    }
 }

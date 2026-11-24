@@ -8,11 +8,13 @@ import com.example.core.database.ReminderPriority
 import com.example.core.di.AppContainer
 import com.example.core.location.LocationFetchResult
 import com.example.core.location.SimpleLocation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 enum class ReminderFilter(val label: String) {
     ALL("Upcoming"),
+    OVERDUE("Overdue"),
     HIGH_PRIORITY("High / Urgent"),
     RECURRING("Recurring"),
     LOCATION("Location"),
@@ -30,6 +32,13 @@ class RemindersViewModel(private val container: AppContainer) : ViewModel() {
     private val _selectedCategory = MutableStateFlow("All")
     val selectedCategory: StateFlow<String> = _selectedCategory.asStateFlow()
 
+    private val tickerFlow: Flow<Long> = flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            delay(15_000L)
+        }
+    }
+
     val allReminders: StateFlow<List<ReminderEntity>> = container.reminderRepository.reminders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -38,11 +47,14 @@ class RemindersViewModel(private val container: AppContainer) : ViewModel() {
         _searchQuery,
         _selectedFilter,
         _selectedCategory,
-    ) { list, query, filter, cat ->
+        tickerFlow,
+    ) { list, query, filter, cat, now ->
         val q = query.trim().lowercase()
         list.filter { item ->
+            val targetMs = item.snoozedUntilMillis ?: item.triggerAtMillis
             val matchesFilter = when (filter) {
                 ReminderFilter.ALL -> !item.isCompleted
+                ReminderFilter.OVERDUE -> !item.isCompleted && targetMs < now
                 ReminderFilter.HIGH_PRIORITY -> !item.isCompleted &&
                     (item.priority == ReminderPriority.HIGH.name || item.priority == ReminderPriority.URGENT.name)
                 ReminderFilter.RECURRING -> !item.isCompleted && item.repeatType != "NONE"

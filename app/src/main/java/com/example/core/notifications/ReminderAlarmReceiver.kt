@@ -8,6 +8,7 @@ import com.example.core.database.AlarmHistoryEntity
 import com.example.core.database.RRDatabase
 import com.example.core.database.ReminderPriority
 import com.example.core.database.TimerHistoryEntity
+import com.example.core.datastore.UserPreferencesRepository
 import com.example.widgets.WidgetUpdateHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +27,9 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                 val db = RRDatabase.getInstance(appContext)
                 val notifManager = RRNotificationManager(appContext, db.notificationLogDao())
                 val scheduler = ReminderAlarmScheduler(appContext)
+                val prefs = runCatching {
+                    UserPreferencesRepository(appContext).getSnapshot()
+                }.getOrNull()
 
                 when (action) {
                     ACTION_FIRE_REMINDER -> if (id > 0) {
@@ -37,8 +41,10 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                 title = reminder.title,
                                 body = reminder.description.ifBlank { reminder.notes },
                                 priorityLabel = priority.label,
+                                isLeadAlert = false,
+                                soundUriString = prefs?.notificationSoundUri,
+                                vibrate = prefs?.vibrationEnabled ?: true,
                             )
-                            // If recurring, advance and schedule the next occurrence
                             val nextTrigger = ScheduleCalculator.computeNextReminderTrigger(
                                 reminder = reminder,
                                 afterMillis = System.currentTimeMillis(),
@@ -50,10 +56,31 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                     updatedAtMillis = System.currentTimeMillis(),
                                 )
                                 db.reminderDao().update(updated)
-                                scheduler.scheduleReminder(updated)
+                                scheduler.scheduleReminder(
+                                    reminder = updated,
+                                    leadMinutes = prefs?.defaultReminderLeadMinutes ?: 0,
+                                )
                             } else if (reminder.snoozedUntilMillis != null) {
                                 db.reminderDao().update(reminder.copy(snoozedUntilMillis = null))
                             }
+                        }
+                    }
+
+                    ACTION_FIRE_REMINDER_LEAD -> if (id > 0) {
+                        val leadMins = intent.getIntExtra(EXTRA_LEAD_MINUTES, 5)
+                        val reminder = db.reminderDao().getById(id)
+                        if (reminder != null && !reminder.isCompleted) {
+                            val priority = ReminderPriority.fromName(reminder.priority)
+                            notifManager.postReminderNotification(
+                                reminderId = reminder.id,
+                                title = reminder.title,
+                                body = reminder.description.ifBlank { reminder.notes },
+                                priorityLabel = priority.label,
+                                isLeadAlert = true,
+                                leadMinutes = leadMins,
+                                soundUriString = prefs?.notificationSoundUri,
+                                vibrate = prefs?.vibrationEnabled ?: true,
+                            )
                         }
                     }
 
@@ -70,6 +97,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                             scheduler.cancelReminder(id)
                         }
                         notifManager.cancelNotification((1000 + id).toInt())
+                        notifManager.cancelNotification((15_000 + id).toInt())
                     }
 
                     ACTION_SNOOZE_REMINDER -> if (id > 0) {
@@ -78,9 +106,13 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                             val snoozeUntil = System.currentTimeMillis() + 10 * 60_000L
                             val updated = reminder.copy(snoozedUntilMillis = snoozeUntil)
                             db.reminderDao().update(updated)
-                            scheduler.scheduleReminder(updated)
+                            scheduler.scheduleReminder(
+                                reminder = updated,
+                                leadMinutes = prefs?.defaultReminderLeadMinutes ?: 0,
+                            )
                         }
                         notifManager.cancelNotification((1000 + id).toInt())
+                        notifManager.cancelNotification((15_000 + id).toInt())
                     }
 
                     ACTION_FIRE_ALARM -> if (id > 0) {
@@ -184,7 +216,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                 putExtra(AlarmForegroundService.EXTRA_ID, timer.id)
                                 putExtra(AlarmForegroundService.EXTRA_LABEL, timer.label)
                                 putExtra(AlarmForegroundService.EXTRA_IS_TIMER, true)
-                                putExtra(AlarmForegroundService.EXTRA_VIBRATE, true)
+                                putExtra(AlarmForegroundService.EXTRA_VIBRATE, prefs?.vibrationEnabled ?: true)
                                 putExtra(AlarmForegroundService.EXTRA_GRADUAL_VOLUME, false)
                             }
                             ContextCompat.startForegroundService(appContext, serviceIntent)
@@ -221,7 +253,9 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
     companion object {
         const val EXTRA_ID = "extra_id"
         const val EXTRA_SNOOZE_MINUTES = "extra_snooze_minutes"
+        const val EXTRA_LEAD_MINUTES = "extra_lead_minutes"
         const val ACTION_FIRE_REMINDER = "com.example.action.FIRE_REMINDER"
+        const val ACTION_FIRE_REMINDER_LEAD = "com.example.action.FIRE_REMINDER_LEAD"
         const val ACTION_COMPLETE_REMINDER = "com.example.action.COMPLETE_REMINDER"
         const val ACTION_SNOOZE_REMINDER = "com.example.action.SNOOZE_REMINDER"
         const val ACTION_FIRE_ALARM = "com.example.action.FIRE_ALARM"

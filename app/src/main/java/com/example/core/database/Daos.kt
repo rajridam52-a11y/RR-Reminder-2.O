@@ -168,6 +168,9 @@ interface HabitDao {
     @Query("SELECT * FROM habits")
     suspend fun getAllSync(): List<HabitEntity>
 
+    @Query("SELECT * FROM habit_logs WHERE habitId = :habitId")
+    suspend fun getLogsForHabitSync(habitId: Long): List<HabitLogEntity>
+
     @Query("SELECT * FROM habits WHERE uuid = :uuid LIMIT 1")
     suspend fun getByUuid(uuid: String): HabitEntity?
 
@@ -315,6 +318,27 @@ interface WeatherCacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCache(cache: WeatherCacheEntity)
+}
+
+@Dao
+interface CalendarEventDao {
+    @Query("SELECT * FROM calendar_events ORDER BY startMillis ASC")
+    fun observeAll(): Flow<List<CalendarEventEntity>>
+
+    @Query("SELECT * FROM calendar_events ORDER BY startMillis ASC")
+    suspend fun getAllSync(): List<CalendarEventEntity>
+
+    @Query("SELECT * FROM calendar_events WHERE uuid = :uuid LIMIT 1")
+    suspend fun getByUuid(uuid: String): CalendarEventEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(event: CalendarEventEntity): Long
+
+    @Update
+    suspend fun update(event: CalendarEventEntity)
+
+    @Query("DELETE FROM calendar_events WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }
 
 @Dao

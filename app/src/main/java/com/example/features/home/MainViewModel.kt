@@ -3,16 +3,23 @@ package com.example.features.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.core.ai.AssistantUiState
 import com.example.core.database.*
 import com.example.core.datastore.DashboardWidgetId
 import com.example.core.datastore.UserPreferences
-import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.di.AppContainer
+import com.example.core.firebase.GlobalAppConfig
+import com.example.core.network.NetworkTimeSyncStatus
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 data class SmartSearchResults(
     val reminders: List<ReminderEntity> = emptyList(),
@@ -21,10 +28,12 @@ data class SmartSearchResults(
     val alarms: List<AlarmEntity> = emptyList(),
     val habits: List<HabitWithLogs> = emptyList(),
     val routines: List<RoutineWithSteps> = emptyList(),
+    val calendarEvents: List<CalendarEventEntity> = emptyList(),
 ) {
     val isEmpty: Boolean
         get() = reminders.isEmpty() && tasks.isEmpty() && notes.isEmpty() &&
-            alarms.isEmpty() && habits.isEmpty() && routines.isEmpty()
+            alarms.isEmpty() && habits.isEmpty() && routines.isEmpty() &&
+            calendarEvents.isEmpty()
 }
 
 data class HomeUiState(
@@ -36,21 +45,37 @@ data class HomeUiState(
     val recentCompleted: List<String> = emptyList(),
     val activeHabitsCount: Int = 0,
     val unreadNotificationsCount: Int = 0,
+    val totalRemindersCount: Int = 0,
+    val activeRemindersCount: Int = 0,
+    val overdueRemindersCount: Int = 0,
+    val pendingTasksCount: Int = 0,
+    val completedTasksCount: Int = 0,
+    val todayCompletedCount: Int = 0,
+    val todayTotalCount: Int = 0,
+    val todayProgressFraction: Float = 0f,
 )
 
 class MainViewModel(private val container: AppContainer) : ViewModel() {
 
-    val preferences: StateFlow<UserPreferences> = container.preferencesRepository.preferences
+    val preferences: StateFlow<UserPreferences> = container.effectivePreferences
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserPreferences())
 
-    private val _splashFinished = MutableStateFlow(false)
+    val remoteConfig: StateFlow<GlobalAppConfig?> = container.remoteGlobalConfig
+
+    private val _splashFinished = MutableStateFlow(true)
     val splashFinished: StateFlow<Boolean> = _splashFinished.asStateFlow()
 
-    private val _welcomeDismissed = MutableStateFlow(false)
+    private val _welcomeDismissed = MutableStateFlow(true)
     val welcomeDismissed: StateFlow<Boolean> = _welcomeDismissed.asStateFlow()
 
-    private val _nowMillis = MutableStateFlow(System.currentTimeMillis())
+    private val _nowMillis = MutableStateFlow(container.networkTimeProvider.currentEpochMillis())
     val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
+
+    val timeSyncStatus: StateFlow<NetworkTimeSyncStatus> = container.networkTimeProvider.syncStatus
+
+    private val _assistantState = MutableStateFlow<AssistantUiState>(AssistantUiState.Idle)
+    val assistantState: StateFlow<AssistantUiState> = _assistantState.asStateFlow()
+    private var assistantJob: Job? = null
 
     val homeState: StateFlow<HomeUiState> = combine(
         _nowMillis,
@@ -73,10 +98,40 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val habits = values[5] as List<HabitWithLogs>
         val unread = values[6] as Int
 
-        val upcoming = reminders.filter { !it.isCompleted }.sortedBy { it.snoozedUntilMillis ?: it.triggerAtMillis }
+        val zone = ZoneId.systemDefault()
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val todayEpochDay = today.toEpochDay()
+
+        val activeReminders = reminders.filter { !it.isCompleted }
+            .sortedBy { it.snoozedUntilMillis ?: it.triggerAtMillis }
+        val overdueCount = activeReminders.count { (it.snoozedUntilMillis ?: it.triggerAtMillis) < now }
+
         val nextAlarm = alarms.filter { it.isEnabled && it.nextTriggerAtMillis != null }
             .minByOrNull { it.nextTriggerAtMillis ?: Long.MAX_VALUE }
+
         val openTasks = tasks.filter { !it.task.isCompleted }
+        val completedTasksCount = tasks.count { it.task.isCompleted }
+
+        val activeHabits = habits.filter { !it.habit.isArchived && !it.habit.isPaused }
+        val habitsDoneToday = activeHabits.count { hw -> hw.logs.any { it.dateEpochDay == todayEpochDay } }
+
+        val remindersToday = reminders.filter {
+            val ms = it.snoozedUntilMillis ?: it.triggerAtMillis
+            Instant.ofEpochMilli(ms).atZone(zone).toLocalDate() == today
+        }
+        val remindersDoneToday = remindersToday.count { it.isCompleted }
+
+        val tasksDueTodayOrDoneToday = tasks.filter { tw ->
+            val due = tw.task.dueDateMillis
+            val doneMs = tw.task.completedAtMillis
+            (due != null && Instant.ofEpochMilli(due).atZone(zone).toLocalDate() == today) ||
+                (doneMs != null && Instant.ofEpochMilli(doneMs).atZone(zone).toLocalDate() == today)
+        }
+        val tasksDoneToday = tasksDueTodayOrDoneToday.count { it.task.isCompleted }
+
+        val todayTotal = remindersToday.size + tasksDueTodayOrDoneToday.size + activeHabits.size
+        val todayDone = remindersDoneToday + tasksDoneToday + habitsDoneToday
+        val progress = if (todayTotal > 0) (todayDone.toFloat() / todayTotal.toFloat()).coerceIn(0f, 1f) else 0f
 
         val recentDone = buildList {
             reminders.filter { it.isCompleted && it.completedAtMillis != null }
@@ -91,13 +146,21 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
         HomeUiState(
             nowMillis = now,
-            upcomingReminders = upcoming.take(4),
+            upcomingReminders = activeReminders.take(4),
             nextAlarm = nextAlarm,
             weather = weather,
             todayTasks = openTasks.take(4),
             recentCompleted = recentDone,
-            activeHabitsCount = habits.count { !it.habit.isArchived && !it.habit.isPaused },
+            activeHabitsCount = activeHabits.size,
             unreadNotificationsCount = unread,
+            totalRemindersCount = reminders.size,
+            activeRemindersCount = activeReminders.size,
+            overdueRemindersCount = overdueCount,
+            pendingTasksCount = openTasks.size,
+            completedTasksCount = completedTasksCount,
+            todayCompletedCount = todayDone,
+            todayTotalCount = todayTotal,
+            todayProgressFraction = progress,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 
@@ -116,6 +179,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.alarmRepository.alarms,
         container.habitRepository.habits,
         container.routineFocusRepository.routines,
+        container.calendarEventRepository.events,
     ) { values ->
         val q = (values[0] as String).trim().lowercase()
         if (q.isBlank()) return@combine SmartSearchResults()
@@ -147,20 +211,81 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val routines = (values[6] as List<RoutineWithSteps>).filter {
             it.routine.name.lowercase().contains(q)
         }
-        SmartSearchResults(reminders, tasks, notes, alarms, habits, routines)
+        @Suppress("UNCHECKED_CAST")
+        val events = (values[7] as List<CalendarEventEntity>).filter {
+            it.title.lowercase().contains(q) || it.description.lowercase().contains(q) ||
+                it.location.lowercase().contains(q)
+        }
+        SmartSearchResults(reminders, tasks, notes, alarms, habits, routines, events)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SmartSearchResults())
 
     init {
         viewModelScope.launch {
-            delay(1150L)
-            _splashFinished.value = true
+            container.networkTimeProvider.syncNow()
+            _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
         }
         viewModelScope.launch {
-            while (true) {
-                delay(1000L)
-                _nowMillis.value = System.currentTimeMillis()
+            container.ownerConfigRepository.observeGlobalConfig().collect { res ->
+                res.onSuccess { cfg ->
+                    container.applyRemoteGlobalConfig(cfg)
+                    _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+                }
             }
         }
+        viewModelScope.launch {
+            while (isActive) {
+                val now = container.networkTimeProvider.currentEpochMillis()
+                _nowMillis.value = now
+                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
+                delay(waitMs)
+            }
+        }
+    }
+
+    fun syncNetworkTime() {
+        viewModelScope.launch {
+            container.networkTimeProvider.syncNow()
+            _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+        }
+    }
+
+    fun refreshClockNow() {
+        _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+    }
+
+    fun askProductivityAssistant(userPrompt: String) {
+        if (userPrompt.isBlank()) return
+        assistantJob?.cancel()
+        assistantJob = viewModelScope.launch {
+            val state = homeState.value
+            val upcomingList = state.upcomingReminders.take(5).joinToString("; ") {
+                "${it.title} (${it.category}, ${it.priority})"
+            }.ifBlank { "None" }
+            val tasksList = state.todayTasks.take(5).joinToString("; ") {
+                "${it.task.title} (${it.task.priority})"
+            }.ifBlank { "None" }
+            val weatherDesc = state.weather?.let {
+                "${it.cityName}: ${it.currentTempC.toInt()}°C, Wind ${it.windKmh.toInt()} km/h"
+            } ?: "Unavailable"
+
+            val summary = buildString {
+                appendLine("- Overdue reminders: ${state.overdueRemindersCount}, Active reminders: ${state.activeRemindersCount}")
+                appendLine("- Upcoming reminders: $upcomingList")
+                appendLine("- Open tasks (${state.pendingTasksCount}): $tasksList")
+                appendLine("- Active habits: ${state.activeHabitsCount}, Today progress: ${state.todayCompletedCount}/${state.todayTotalCount}")
+                appendLine("- Weather: $weatherDesc")
+            }
+
+            container.aiAssistantRepository.streamProductivityAdvice(userPrompt, summary)
+                .collect { uiState ->
+                    _assistantState.value = uiState
+                }
+        }
+    }
+
+    fun clearAssistantResponse() {
+        assistantJob?.cancel()
+        _assistantState.value = AssistantUiState.Idle
     }
 
     fun setSearchQuery(q: String) {

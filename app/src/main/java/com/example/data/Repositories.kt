@@ -5,7 +5,6 @@ import com.example.core.database.*
 import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.network.*
 import com.example.core.notifications.ReminderAlarmScheduler
-import com.example.core.notifications.ScheduleCalculator
 import com.example.widgets.WidgetUpdateHelper
 import com.squareup.moshi.Types
 import kotlinx.coroutines.flow.Flow
@@ -13,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 class ReminderRepository(
     private val context: Context,
     private val dao: ReminderDao,
+    private val prefsRepo: UserPreferencesRepository,
     private val scheduler: ReminderAlarmScheduler,
 ) {
     val reminders: Flow<List<ReminderEntity>> = dao.observeAll()
@@ -25,10 +25,11 @@ class ReminderRepository(
             reminder.id
         }
         val saved = reminder.copy(id = id)
+        val leadMinutes = runCatching { prefsRepo.getSnapshot().defaultReminderLeadMinutes }.getOrDefault(0)
         if (saved.isCompleted) {
             scheduler.cancelReminder(id)
         } else {
-            scheduler.scheduleReminder(saved)
+            scheduler.scheduleReminder(saved, leadMinutes)
         }
         WidgetUpdateHelper.updateAllWidgets(context)
         return id
@@ -42,7 +43,8 @@ class ReminderRepository(
             reminder.copy(isCompleted = false, completedAtMillis = null, updatedAtMillis = now)
         }
         dao.update(updated)
-        if (updated.isCompleted) scheduler.cancelReminder(updated.id) else scheduler.scheduleReminder(updated)
+        val leadMinutes = runCatching { prefsRepo.getSnapshot().defaultReminderLeadMinutes }.getOrDefault(0)
+        if (updated.isCompleted) scheduler.cancelReminder(updated.id) else scheduler.scheduleReminder(updated, leadMinutes)
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
@@ -58,6 +60,12 @@ class ReminderRepository(
         scheduler.cancelReminder(id)
         dao.deleteById(id)
         WidgetUpdateHelper.updateAllWidgets(context)
+    }
+
+    suspend fun rescheduleAllReminders(leadMinutes: Int) {
+        dao.getAllActiveSync().forEach { reminder ->
+            scheduler.scheduleReminder(reminder, leadMinutes)
+        }
     }
 }
 
@@ -138,7 +146,8 @@ class WeatherRepository(
             val hTemps = resp.hourly?.temperature2m.orEmpty()
             val hRain = resp.hourly?.precipitationProbability.orEmpty()
             val hCodes = resp.hourly?.weatherCode.orEmpty()
-            val countH = minOf(24, hTimes.size, hTemps.size)
+            val hUv = resp.hourly?.uvIndex.orEmpty()
+            val countH = minOf(48, hTimes.size, hTemps.size)
             for (i in 0 until countH) {
                 hourlyList.add(
                     HourlyForecastItem(
@@ -146,6 +155,7 @@ class WeatherRepository(
                         tempC = hTemps[i],
                         rainProbPercent = hRain.getOrElse(i) { 0 },
                         weatherCode = hCodes.getOrElse(i) { 0 },
+                        uvIndex = hUv.getOrElse(i) { 0.0 },
                     ),
                 )
             }
@@ -156,6 +166,8 @@ class WeatherRepository(
             val dMin = resp.daily?.temperatureMin.orEmpty()
             val dRain = resp.daily?.precipitationProbabilityMax.orEmpty()
             val dCodes = resp.daily?.weatherCode.orEmpty()
+            val dUv = resp.daily?.uvIndexMax.orEmpty()
+            val dPrecip = resp.daily?.precipitationSum.orEmpty()
             val countD = minOf(7, dTimes.size, dMax.size, dMin.size)
             for (i in 0 until countD) {
                 dailyList.add(
@@ -165,6 +177,8 @@ class WeatherRepository(
                         minTempC = dMin[i],
                         rainProbPercent = dRain.getOrElse(i) { 0 },
                         weatherCode = dCodes.getOrElse(i) { 0 },
+                        uvIndexMax = dUv.getOrElse(i) { 0.0 },
+                        precipitationSumMm = dPrecip.getOrElse(i) { 0.0 },
                     ),
                 )
             }
@@ -184,6 +198,12 @@ class WeatherRepository(
                 hourlyJson = hourlyAdapter.toJson(hourlyList),
                 dailyJson = dailyAdapter.toJson(dailyList),
                 updatedAtMillis = System.currentTimeMillis(),
+                apiTimezone = resp.timezone,
+                windDirectionDeg = current.windDirection10m,
+                pressureHpa = current.surfacePressure,
+                uvIndex = current.uvIndex,
+                visibilityMeters = current.visibility,
+                precipitationMm = current.precipitation,
             )
             dao.upsertCache(entity)
             prefsRepo.setWeatherLocation(cityName, latitude, longitude)
@@ -412,4 +432,17 @@ class RoutineFocusRepository(
     }
 
     suspend fun recordFocusSession(session: FocusSessionEntity) = focusDao.insertSession(session)
+}
+
+class CalendarEventRepository(private val dao: CalendarEventDao) {
+    val events: Flow<List<CalendarEventEntity>> = dao.observeAll()
+
+    suspend fun saveEvent(event: CalendarEventEntity): Long {
+        return if (event.id == 0L) dao.insert(event) else {
+            dao.update(event)
+            event.id
+        }
+    }
+
+    suspend fun deleteEvent(id: Long) = dao.deleteById(id)
 }

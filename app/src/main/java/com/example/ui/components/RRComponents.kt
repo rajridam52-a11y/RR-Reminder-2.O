@@ -1,15 +1,19 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,6 +26,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -32,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +54,48 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.SpaceGroteskFontFamily
+
+/**
+ * Aurora UI 2.0 full-screen ambient atmosphere container. Renders subtle radial cyan/emerald
+ * light fields over deep midnight navy in dark mode, or crisp luminous frost in light mode.
+ */
+@Composable
+fun RRBackgroundContainer(
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val extra = LocalRRExtraColors.current
+    val bg = MaterialTheme.colorScheme.background
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(bg),
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        extra.glowBrushStart,
+                        Color.Transparent,
+                    ),
+                    center = Offset(size.width * 0.14f, size.height * 0.08f),
+                    radius = size.maxDimension * 0.62f,
+                ),
+            )
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        extra.glowBrushEnd,
+                        Color.Transparent,
+                    ),
+                    center = Offset(size.width * 0.88f, size.height * 0.78f),
+                    radius = size.maxDimension * 0.56f,
+                ),
+            )
+        }
+        content()
+    }
+}
 
 /**
  * Original custom-drawn RR Reminder geometric brand emblem combining a precision chronometer arc
@@ -85,7 +133,6 @@ fun RRBrandMark(
                 useCenter = false,
                 style = Stroke(width = strokeW, cap = StrokeCap.Round),
             )
-            // Clock hands precision tick
             val center = Offset(this.size.width / 2f, this.size.height / 2f)
             drawLine(
                 brush = gradient,
@@ -112,9 +159,11 @@ fun RRBrandMark(
             style = MaterialTheme.typography.labelSmall.copy(
                 fontFamily = SpaceGroteskFontFamily,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.90f),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
             ),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 2.dp),
         )
     }
 }
@@ -123,12 +172,25 @@ fun RRBrandMark(
 fun RRCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
-    containerColor: Color = MaterialTheme.colorScheme.surface,
+    containerColor: Color? = null,
     accentGlow: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
-    val borderColor = if (accentGlow) extra.accentPrimary.copy(alpha = 0.45f) else extra.cardBorder
+    val resolvedContainer = containerColor ?: extra.glassFill
+    val borderStroke = if (accentGlow) {
+        BorderStroke(
+            width = 1.25.dp,
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    extra.accentPrimary.copy(alpha = 0.65f),
+                    extra.accentSecondary.copy(alpha = 0.52f),
+                ),
+            ),
+        )
+    } else {
+        BorderStroke(1.dp, extra.cardBorder)
+    }
     val cardModifier = if (onClick != null) {
         modifier
             .fillMaxWidth()
@@ -140,16 +202,61 @@ fun RRCard(
     Card(
         modifier = cardModifier,
         shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        border = BorderStroke(1.dp, borderColor),
+        colors = CardDefaults.cardColors(containerColor = resolvedContainer),
+        border = borderStroke,
         elevation = CardDefaults.cardElevation(
-            defaultElevation = if (extra.isDark) 2.dp else 1.dp,
+            defaultElevation = if (extra.isDark) 0.dp else 2.dp,
         ),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
             content = content,
         )
+    }
+}
+
+@Composable
+fun RRCircularProgressRing(
+    progress: Float,
+    modifier: Modifier = Modifier,
+    size: Dp = 84.dp,
+    strokeWidth: Dp = 8.dp,
+    primaryColor: Color = LocalRRExtraColors.current.accentPrimary,
+    secondaryColor: Color = LocalRRExtraColors.current.accentSecondary,
+    trackColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    centerContent: @Composable BoxScope.() -> Unit,
+) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 450),
+        label = "ringProgress",
+    )
+    Box(
+        modifier = modifier.size(size),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokePx = strokeWidth.toPx()
+            drawArc(
+                color = trackColor,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                style = Stroke(width = strokePx, cap = StrokeCap.Round),
+            )
+            if (animatedProgress > 0f) {
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        colors = listOf(primaryColor, secondaryColor, primaryColor),
+                    ),
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedProgress,
+                    useCenter = false,
+                    style = Stroke(width = strokePx, cap = StrokeCap.Round),
+                )
+            }
+        }
+        centerContent()
     }
 }
 
@@ -195,7 +302,7 @@ fun RRStatusPill(
         modifier = modifier,
         shape = CircleShape,
         color = color.copy(alpha = 0.14f),
-        border = BorderStroke(0.75.dp, color.copy(alpha = 0.35f)),
+        border = BorderStroke(0.75.dp, color.copy(alpha = 0.38f)),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -238,7 +345,8 @@ fun RREmptyState(
         ) {
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)),
                 modifier = Modifier.size(56.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -280,6 +388,7 @@ fun RRSearchField(
     modifier: Modifier = Modifier,
     testTag: String = "search_input",
 ) {
+    val extra = LocalRRExtraColors.current
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -305,6 +414,11 @@ fun RRSearchField(
         },
         singleLine = true,
         shape = MaterialTheme.shapes.medium,
+        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = extra.glassFill,
+            unfocusedContainerColor = extra.glassFill,
+            unfocusedBorderColor = extra.cardBorder,
+        ),
     )
 }
 
@@ -325,12 +439,12 @@ fun RRConfirmDialog(
             Button(
                 onClick = onConfirm,
                 colors = if (isDestructive) {
-                    androidx.compose.material3.ButtonDefaults.buttonColors(
+                    ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError,
                     )
                 } else {
-                    androidx.compose.material3.ButtonDefaults.buttonColors()
+                    ButtonDefaults.buttonColors()
                 },
             ) {
                 Text(confirmText)
@@ -355,7 +469,7 @@ fun RRMetricBadge(
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
         color = color.copy(alpha = 0.12f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.25f)),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.28f)),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Text(
@@ -364,7 +478,7 @@ fun RRMetricBadge(
                 color = color,
                 maxLines = 1,
             )
-            Spacer(modifier = Modifier.width(2.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,

@@ -10,14 +10,17 @@ import com.example.core.location.LocationFetchResult
 import com.example.core.network.DailyForecastItem
 import com.example.core.network.GeocodingResultDto
 import com.example.core.network.HourlyForecastItem
+import com.example.core.network.NetworkTimeSyncStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 data class WeatherUiState(
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
+    val isShowingCachedData: Boolean = false,
     val isGpsDisabled: Boolean = false,
     val isGpsSourced: Boolean = false,
     val gpsProviderInfo: String? = null,
@@ -38,6 +41,7 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
 
     private val _isLoading = MutableStateFlow(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
+    private val _isShowingCachedData = MutableStateFlow(false)
     private val _isGpsDisabled = MutableStateFlow(false)
     private val _isGpsSourced = MutableStateFlow(false)
     private val _gpsProviderInfo = MutableStateFlow<String?>(null)
@@ -45,19 +49,21 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
     private val _isSearching = MutableStateFlow(false)
 
     val weatherUiState: StateFlow<WeatherUiState> = combine(
-        combine(_isLoading, _errorMessage, _isGpsDisabled, _isGpsSourced, _gpsProviderInfo) { loading, err, gpsOff, gpsSrc, gpsInfo ->
-            Tuple5(loading, err, gpsOff, gpsSrc, gpsInfo)
+        combine(_isLoading, _errorMessage, _isShowingCachedData, _isGpsDisabled, _isGpsSourced) { loading, err, cached, gpsOff, gpsSrc ->
+            Tuple5(loading, err, cached, gpsOff, gpsSrc)
         },
+        _gpsProviderInfo,
         container.weatherRepository.weatherCache,
         _cityResults,
         _isSearching,
-    ) { status, cache, cities, searching ->
+    ) { status, gpsInfo, cache, cities, searching ->
         WeatherUiState(
             isLoading = status.first,
             errorMessage = status.second,
-            isGpsDisabled = status.third,
-            isGpsSourced = status.fourth,
-            gpsProviderInfo = status.fifth,
+            isShowingCachedData = status.third && cache != null,
+            isGpsDisabled = status.fourth,
+            isGpsSourced = status.fifth,
+            gpsProviderInfo = gpsInfo,
             cache = cache,
             hourly = cache?.let { container.weatherRepository.parseHourly(it.hourlyJson) }.orEmpty(),
             daily = cache?.let { container.weatherRepository.parseDaily(it.dailyJson) }.orEmpty(),
@@ -70,8 +76,10 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         container.database.worldClockDao().observeCities()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _nowMillis = MutableStateFlow(System.currentTimeMillis())
+    private val _nowMillis = MutableStateFlow(container.networkTimeProvider.currentEpochMillis())
     val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
+
+    val timeSyncStatus: StateFlow<NetworkTimeSyncStatus> = container.networkTimeProvider.syncStatus
 
     private val _zoneQuery = MutableStateFlow("")
     val zoneQuery: StateFlow<String> = _zoneQuery.asStateFlow()
@@ -89,22 +97,37 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
 
     init {
         viewModelScope.launch {
-            while (true) {
-                _nowMillis.value = System.currentTimeMillis()
-                delay(1000L)
+            while (isActive) {
+                val now = container.networkTimeProvider.currentEpochMillis()
+                _nowMillis.value = now
+                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
+                delay(waitMs)
             }
         }
         viewModelScope.launch {
             val prefs = container.preferencesRepository.getSnapshot()
+            val cache = container.database.weatherCacheDao().getCacheSync()
+            val isStale = cache == null || (System.currentTimeMillis() - cache.updatedAtMillis) > STALE_CACHE_MS
             if (container.locationHelper.hasLocationPermission() &&
                 container.locationHelper.isGpsEnabled() &&
                 !prefs.hasSavedWeatherLocation
             ) {
                 fetchWeatherByCurrentLocation()
-            } else if (prefs.hasSavedWeatherLocation) {
+            } else if (prefs.hasSavedWeatherLocation && isStale) {
                 refreshSavedWeather()
             }
         }
+    }
+
+    fun syncNetworkTime() {
+        viewModelScope.launch {
+            container.networkTimeProvider.syncNow()
+            _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+        }
+    }
+
+    fun refreshClockNow() {
+        _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
     }
 
     fun refreshSavedWeather() {
@@ -131,6 +154,7 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
+            _isShowingCachedData.value = false
             _isGpsDisabled.value = false
             when (val result = container.locationHelper.getCurrentLocationDetailed()) {
                 is LocationFetchResult.Success -> {
@@ -173,13 +197,15 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
+            _isShowingCachedData.value = false
             _isGpsDisabled.value = false
             _isGpsSourced.value = fromGps
             if (!fromGps) _gpsProviderInfo.value = null
             val result = container.weatherRepository.fetchAndCacheWeather(cityName, lat, lon)
             _isLoading.value = false
             result.onFailure { ex ->
-                _errorMessage.value = "Unable to reach Open-Meteo weather service (${ex.localizedMessage ?: "Network error"}). Showing last cached data if available."
+                _isShowingCachedData.value = true
+                _errorMessage.value = "Offline or unable to reach Open-Meteo (${ex.localizedMessage ?: "Network error"})."
             }
         }
     }
@@ -209,7 +235,7 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
     fun addWorldCity(option: BuiltInCityOption) {
         viewModelScope.launch {
             val existing = container.database.worldClockDao().getAllSync()
-            if (existing.none { it.zoneId == option.zoneId }) {
+            if (existing.none { it.zoneId == option.zoneId && it.cityName.equals(option.cityName, ignoreCase = true) }) {
                 container.database.worldClockDao().insertCity(
                     WorldClockCityEntity(
                         cityName = option.cityName,
@@ -235,6 +261,8 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
     )
 
     companion object {
+        private const val STALE_CACHE_MS = 30 * 60_000L
+
         private val curatedAndSystemZones: List<BuiltInCityOption> by lazy {
             val curated = listOf(
                 BuiltInCityOption("New York", "United States", "America/New_York"),
@@ -247,6 +275,7 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
                 BuiltInCityOption("Berlin", "Germany", "Europe/Berlin"),
                 BuiltInCityOption("Zurich", "Switzerland", "Europe/Zurich"),
                 BuiltInCityOption("Dubai", "UAE", "Asia/Dubai"),
+                BuiltInCityOption("New Delhi", "India", "Asia/Kolkata"),
                 BuiltInCityOption("Mumbai", "India", "Asia/Kolkata"),
                 BuiltInCityOption("Bengaluru", "India", "Asia/Kolkata"),
                 BuiltInCityOption("Singapore", "Singapore", "Asia/Singapore"),

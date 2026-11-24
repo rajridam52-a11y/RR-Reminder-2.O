@@ -9,6 +9,7 @@ import com.example.core.di.AppContainer
 import com.example.core.notifications.RRChannels
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
@@ -20,6 +21,7 @@ data class FocusUiState(
     val focusMinutes: Int = 25,
     val breakMinutes: Int = 5,
     val remainingMs: Long = 25 * 60_000L,
+    val endEpochMs: Long = 0L,
 )
 
 class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
@@ -48,9 +50,13 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
         container.routineFocusRepository.focusSessions
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Reminders for Calendar & Note linking
+    // Reminders & RR Calendar Events
     val reminders: StateFlow<List<ReminderEntity>> =
         container.reminderRepository.reminders
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val calendarEvents: StateFlow<List<CalendarEventEntity>> =
+        container.calendarEventRepository.events
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Device Calendar Events
@@ -73,7 +79,10 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
                     focusMinutes = prefs.focusMinutes,
                     breakMinutes = prefs.breakMinutes,
                     remainingMs = prefs.focusEndEpochMs - now,
+                    endEpochMs = prefs.focusEndEpochMs,
                 )
+            } else if (prefs.focusRunning && prefs.focusEndEpochMs in 1L..now) {
+                completeFocusPhase(prefs.focusPhase, prefs.focusLabel, prefs.focusMinutes, prefs.breakMinutes)
             } else {
                 _focusState.value = FocusUiState(
                     isRunning = false,
@@ -82,23 +91,21 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
                     focusMinutes = prefs.focusMinutes,
                     breakMinutes = prefs.breakMinutes,
                     remainingMs = prefs.focusRemainingMs,
+                    endEpochMs = 0L,
                 )
             }
         }
 
         viewModelScope.launch {
-            while (true) {
-                delay(500L)
-                val prefs = container.preferencesRepository.getSnapshot()
-                if (prefs.focusRunning) {
-                    val rem = (prefs.focusEndEpochMs - System.currentTimeMillis()).coerceAtLeast(0L)
+            while (isActive) {
+                delay(250L)
+                val cur = _focusState.value
+                if (cur.isRunning && cur.endEpochMs > 0L) {
+                    val rem = (cur.endEpochMs - System.currentTimeMillis()).coerceAtLeast(0L)
                     if (rem == 0L) {
-                        completeFocusPhase(prefs.focusPhase, prefs.focusLabel, prefs.focusMinutes, prefs.breakMinutes)
+                        completeFocusPhase(cur.phase, cur.label, cur.focusMinutes, cur.breakMinutes)
                     } else {
-                        _focusState.value = _focusState.value.copy(
-                            isRunning = true,
-                            remainingMs = rem,
-                        )
+                        _focusState.value = cur.copy(remainingMs = rem)
                     }
                 }
             }
@@ -134,6 +141,7 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
             focusMinutes = focusMin,
             breakMinutes = breakMin,
             remainingMs = nextDuration,
+            endEpochMs = 0L,
         )
         container.notificationManager.postSimpleNotification(
             id = 7501,
@@ -146,13 +154,15 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
 
     fun configureFocus(label: String, focusMinutes: Int, breakMinutes: Int) {
         viewModelScope.launch {
-            val rem = focusMinutes.coerceIn(1, 180) * 60_000L
+            val fMin = focusMinutes.coerceIn(1, 180)
+            val bMin = breakMinutes.coerceIn(1, 60)
+            val rem = fMin * 60_000L
             container.preferencesRepository.saveFocusState(
                 running = false,
                 phase = "FOCUS",
                 label = label.ifBlank { "Deep Focus" },
-                focusMinutes = focusMinutes.coerceIn(1, 180),
-                breakMinutes = breakMinutes.coerceIn(1, 60),
+                focusMinutes = fMin,
+                breakMinutes = bMin,
                 remainingMs = rem,
                 endEpochMs = 0L,
             )
@@ -160,9 +170,10 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
                 isRunning = false,
                 phase = "FOCUS",
                 label = label.ifBlank { "Deep Focus" },
-                focusMinutes = focusMinutes.coerceIn(1, 180),
-                breakMinutes = breakMinutes.coerceIn(1, 60),
+                focusMinutes = fMin,
+                breakMinutes = bMin,
                 remainingMs = rem,
+                endEpochMs = 0L,
             )
         }
     }
@@ -180,23 +191,28 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
                 remainingMs = cur.remainingMs,
                 endEpochMs = endEpoch,
             )
-            _focusState.value = cur.copy(isRunning = true)
+            _focusState.value = cur.copy(isRunning = true, endEpochMs = endEpoch)
         }
     }
 
     fun pauseFocus() {
         viewModelScope.launch {
             val cur = _focusState.value
+            val exactRem = if (cur.isRunning && cur.endEpochMs > 0L) {
+                (cur.endEpochMs - System.currentTimeMillis()).coerceAtLeast(0L)
+            } else {
+                cur.remainingMs
+            }
             container.preferencesRepository.saveFocusState(
                 running = false,
                 phase = cur.phase,
                 label = cur.label,
                 focusMinutes = cur.focusMinutes,
                 breakMinutes = cur.breakMinutes,
-                remainingMs = cur.remainingMs,
+                remainingMs = exactRem,
                 endEpochMs = 0L,
             )
-            _focusState.value = cur.copy(isRunning = false)
+            _focusState.value = cur.copy(isRunning = false, remainingMs = exactRem, endEpochMs = 0L)
         }
     }
 
@@ -211,6 +227,15 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
             val end = LocalDate.of(year, month, 1).plusMonths(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
             _deviceCalendarEvents.value = container.calendarReader.getEventsInRange(start, end)
         }
+    }
+
+    // Calendar Events mutations
+    fun saveCalendarEvent(event: CalendarEventEntity) {
+        viewModelScope.launch { container.calendarEventRepository.saveEvent(event) }
+    }
+
+    fun deleteCalendarEvent(id: Long) {
+        viewModelScope.launch { container.calendarEventRepository.deleteEvent(id) }
     }
 
     // Tasks mutations
@@ -231,8 +256,11 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     // Notes mutations
-    fun saveNote(note: NoteEntity) {
-        viewModelScope.launch { container.noteRepository.saveNote(note) }
+    fun saveNote(note: NoteEntity, onSavedId: ((Long) -> Unit)? = null) {
+        viewModelScope.launch {
+            val id = container.noteRepository.saveNote(note)
+            onSavedId?.invoke(id)
+        }
     }
 
     fun togglePinNote(note: NoteEntity) {

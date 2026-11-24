@@ -278,6 +278,26 @@ data class WeatherCacheEntity(
     val hourlyJson: String,
     val dailyJson: String,
     val updatedAtMillis: Long,
+    val apiTimezone: String = "",
+    val windDirectionDeg: Int = 0,
+    val pressureHpa: Double = 0.0,
+    val uvIndex: Double = 0.0,
+    val visibilityMeters: Double = 0.0,
+    val precipitationMm: Double = 0.0,
+)
+
+@Entity(tableName = "calendar_events")
+data class CalendarEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val uuid: String = UUID.randomUUID().toString(),
+    val title: String,
+    val description: String = "",
+    val startMillis: Long,
+    val endMillis: Long,
+    val location: String = "",
+    val category: String = "Personal",
+    val isAllDay: Boolean = false,
+    val createdAtMillis: Long = System.currentTimeMillis(),
 )
 
 @Entity(tableName = "notification_logs")

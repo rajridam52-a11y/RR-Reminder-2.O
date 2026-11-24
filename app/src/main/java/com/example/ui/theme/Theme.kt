@@ -31,6 +31,9 @@ data class RRExtraColors(
     val glowBrushStart: Color,
     val glowBrushEnd: Color,
     val cardBorder: Color,
+    val glassFill: Color,
+    val glassElevatedFill: Color,
+    val navPillFill: Color,
 )
 
 val LocalRRExtraColors = staticCompositionLocalOf {
@@ -39,26 +42,29 @@ val LocalRRExtraColors = staticCompositionLocalOf {
         success = SemanticSuccessDark,
         warning = SemanticWarningDark,
         info = SemanticInfoDark,
-        accentPrimary = AccentPreset.COBALT.primaryDark,
-        accentSecondary = AccentPreset.COBALT.secondaryDark,
-        glowBrushStart = AccentPreset.COBALT.primaryDark.copy(alpha = 0.22f),
-        glowBrushEnd = AccentPreset.COBALT.secondaryDark.copy(alpha = 0.14f),
-        cardBorder = NavyOutline,
+        accentPrimary = AccentPreset.AURORA.primaryDark,
+        accentSecondary = AccentPreset.AURORA.secondaryDark,
+        glowBrushStart = AccentPreset.AURORA.primaryDark.copy(alpha = 0.24f),
+        glowBrushEnd = AccentPreset.AURORA.secondaryDark.copy(alpha = 0.16f),
+        cardBorder = AuroraCyanBright.copy(alpha = 0.24f),
+        glassFill = NavySurface.copy(alpha = 0.76f),
+        glassElevatedFill = NavySurfaceElevated.copy(alpha = 0.85f),
+        navPillFill = Color(0xFF0A142B).copy(alpha = 0.92f),
     )
 }
 
 val RRShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(18.dp),
-    large = RoundedCornerShape(24.dp),
-    extraLarge = RoundedCornerShape(30.dp),
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(26.dp),
+    extraLarge = RoundedCornerShape(32.dp),
 )
 
 @Composable
 fun RRReminderTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
-    accentPreset: AccentPreset = AccentPreset.COBALT,
+    accentPreset: AccentPreset = AccentPreset.AURORA,
     content: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -71,7 +77,7 @@ fun RRReminderTheme(
     val targetPrimary = if (useDark) accentPreset.primaryDark else accentPreset.primaryLight
     val targetSecondary = if (useDark) accentPreset.secondaryDark else accentPreset.secondaryLight
 
-    val animSpec = tween<Color>(durationMillis = 280)
+    val animSpec = tween<Color>(durationMillis = 300)
     val primary = animateColorAsState(targetPrimary, animSpec, label = "primary").value
     val secondary = animateColorAsState(targetSecondary, animSpec, label = "secondary").value
     val background = animateColorAsState(if (useDark) NavyVoid else LightBackground, animSpec, label = "bg").value
@@ -82,11 +88,11 @@ fun RRReminderTheme(
     val colorScheme: ColorScheme = if (useDark) {
         darkColorScheme(
             primary = primary,
-            onPrimary = Color(0xFF041029),
+            onPrimary = Color(0xFF03131A),
             primaryContainer = primary.copy(alpha = 0.20f),
-            onPrimaryContainer = primary.copy(alpha = 0.95f),
+            onPrimaryContainer = primary.copy(alpha = 0.98f),
             secondary = secondary,
-            onSecondary = Color(0xFF0D0824),
+            onSecondary = Color(0xFF031A12),
             secondaryContainer = secondary.copy(alpha = 0.18f),
             onSecondaryContainer = secondary,
             tertiary = SemanticInfoDark,
@@ -110,11 +116,11 @@ fun RRReminderTheme(
         lightColorScheme(
             primary = primary,
             onPrimary = Color.White,
-            primaryContainer = primary.copy(alpha = 0.13f),
+            primaryContainer = primary.copy(alpha = 0.14f),
             onPrimaryContainer = primary,
             secondary = secondary,
             onSecondary = Color.White,
-            secondaryContainer = secondary.copy(alpha = 0.12f),
+            secondaryContainer = secondary.copy(alpha = 0.13f),
             onSecondaryContainer = secondary,
             tertiary = SemanticInfoLight,
             background = background,
@@ -127,7 +133,7 @@ fun RRReminderTheme(
             surfaceContainer = surface,
             surfaceContainerHigh = surfaceContainerHigh,
             outline = LightOutline,
-            outlineVariant = LightOutline.copy(alpha = 0.65f),
+            outlineVariant = LightOutline.copy(alpha = 0.70f),
             error = SemanticErrorLight,
             onError = Color.White,
             errorContainer = SemanticErrorLight.copy(alpha = 0.12f),
@@ -143,8 +149,11 @@ fun RRReminderTheme(
         accentPrimary = primary,
         accentSecondary = secondary,
         glowBrushStart = primary.copy(alpha = if (useDark) 0.24f else 0.12f),
-        glowBrushEnd = secondary.copy(alpha = if (useDark) 0.16f else 0.08f),
-        cardBorder = if (useDark) NavyOutline.copy(alpha = 0.65f) else LightOutline.copy(alpha = 0.75f),
+        glowBrushEnd = secondary.copy(alpha = if (useDark) 0.18f else 0.09f),
+        cardBorder = if (useDark) primary.copy(alpha = 0.24f) else LightOutline.copy(alpha = 0.82f),
+        glassFill = if (useDark) NavySurface.copy(alpha = 0.78f) else LightSurface.copy(alpha = 0.92f),
+        glassElevatedFill = if (useDark) NavySurfaceElevated.copy(alpha = 0.86f) else LightSurfaceVariant.copy(alpha = 0.88f),
+        navPillFill = if (useDark) Color(0xFF0A142C).copy(alpha = 0.94f) else Color(0xFFFFFFFF).copy(alpha = 0.96f),
     )
 
     val view = LocalView.current
@@ -176,7 +185,7 @@ fun MyApplicationTheme(
 ) {
     RRReminderTheme(
         themeMode = if (darkTheme) ThemeMode.DARK else ThemeMode.LIGHT,
-        accentPreset = AccentPreset.COBALT,
+        accentPreset = AccentPreset.AURORA,
         content = content,
     )
 }

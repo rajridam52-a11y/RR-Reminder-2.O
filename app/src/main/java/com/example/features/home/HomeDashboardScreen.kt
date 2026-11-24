@@ -5,6 +5,7 @@ import android.content.Intent
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,22 +38,34 @@ import com.example.core.database.ReminderEntity
 import com.example.core.database.ReminderPriority
 import com.example.core.database.TaskEntity
 import com.example.core.datastore.DashboardWidgetId
+import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.UserPreferences
+import com.example.core.firebase.GlobalAppConfig
+import com.example.core.network.NetworkTimeSyncStatus
 import com.example.core.network.WeatherCodeInterpreter
+import com.example.core.network.WeatherUnits
 import com.example.core.notifications.ScheduleCalculator
 import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
+import com.example.ui.components.RRCircularProgressRing
 import com.example.ui.components.RRMetricBadge
 import com.example.ui.components.RRSectionHeader
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.TabularClockLarge
+import com.example.ui.theme.TabularClockMedium
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeDashboardScreen(
     homeState: HomeUiState,
     preferences: UserPreferences,
+    globalConfig: GlobalAppConfig? = null,
+    timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
+    onSyncNetworkTime: () -> Unit = {},
     onNavigateReminders: () -> Unit,
     onNavigateAlarms: () -> Unit,
     onNavigateWeather: () -> Unit,
@@ -75,6 +88,7 @@ fun HomeDashboardScreen(
     onToggleWidgetVisibility: (String) -> Unit,
     onResetDashboard: () -> Unit,
 ) {
+    val extra = LocalRRExtraColors.current
     var showCustomizeSheet by remember { mutableStateOf(false) }
     var showQuickAddDialog by remember { mutableStateOf(false) }
     var quickAddInitialTitle by remember { mutableStateOf("") }
@@ -103,6 +117,7 @@ fun HomeDashboardScreen(
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = {
@@ -120,7 +135,7 @@ fun HomeDashboardScreen(
                             Text(
                                 text = "Your Time. Your Control.",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = extra.accentPrimary,
                             )
                         }
                     }
@@ -130,7 +145,7 @@ fun HomeDashboardScreen(
                         onClick = onNavigateSearch,
                         modifier = Modifier.testTag("home_search_btn"),
                     ) {
-                        Icon(Icons.Rounded.Search, contentDescription = "Smart Search")
+                        Icon(Icons.Rounded.Search, contentDescription = "Smart Search & Assistant")
                     }
                     IconButton(
                         onClick = onNavigateNotifications,
@@ -160,7 +175,7 @@ fun HomeDashboardScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
+                    containerColor = Color.Transparent,
                 ),
             )
         },
@@ -172,6 +187,8 @@ fun HomeDashboardScreen(
                     voiceAmbiguityNote = null
                     showQuickAddDialog = true
                 },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.testTag("home_quick_add_fab"),
             ) {
                 Icon(Icons.Rounded.Add, contentDescription = "Quick Add")
@@ -182,9 +199,53 @@ fun HomeDashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (globalConfig != null &&
+                globalConfig.syncOverrideEnabled &&
+                globalConfig.bannerEnabled &&
+                globalConfig.bannerMessage.isNotBlank()
+            ) {
+                item(key = "owner_broadcast_banner") {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = extra.accentPrimary.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, extra.accentPrimary.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 720.dp)
+                            .testTag("home_owner_banner"),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.Campaign,
+                                contentDescription = "Owner Broadcast",
+                                tint = extra.accentPrimary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "LIVE OWNER NOTICE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = extra.accentPrimary,
+                                )
+                                Text(
+                                    text = globalConfig.bannerMessage,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             items(visibleWidgets, key = { it }) { widgetKey ->
                 Box(
                     modifier = Modifier
@@ -195,6 +256,10 @@ fun HomeDashboardScreen(
                         DashboardWidgetId.BRIEFING.key -> DailyBriefingHeroCard(
                             homeState = homeState,
                             preferences = preferences,
+                            timeSyncStatus = timeSyncStatus,
+                            onSyncNetworkTime = onSyncNetworkTime,
+                            onOpenOverdue = onNavigateReminders,
+                            onOpenWorldClock = onNavigateWorldClock,
                             onVoiceQuickAdd = {
                                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                                     putExtra(
@@ -229,6 +294,7 @@ fun HomeDashboardScreen(
 
                         DashboardWidgetId.UPCOMING_REMINDERS.key -> UpcomingRemindersCard(
                             reminders = homeState.upcomingReminders,
+                            nowMillis = homeState.nowMillis,
                             preferences = preferences,
                             onViewAll = onNavigateReminders,
                             onComplete = onQuickCompleteReminder,
@@ -236,12 +302,14 @@ fun HomeDashboardScreen(
 
                         DashboardWidgetId.NEXT_ALARM.key -> NextAlarmDashboardCard(
                             nextAlarm = homeState.nextAlarm,
+                            nowMillis = homeState.nowMillis,
                             preferences = preferences,
                             onClick = onNavigateAlarms,
                         )
 
                         DashboardWidgetId.WEATHER.key -> WeatherSummaryDashboardCard(
                             homeState = homeState,
+                            preferences = preferences,
                             onClick = onNavigateWeather,
                         )
 
@@ -257,7 +325,7 @@ fun HomeDashboardScreen(
                     }
                 }
             }
-            item { Spacer(modifier = Modifier.height(76.dp)) }
+            item { Spacer(modifier = Modifier.height(84.dp)) }
         }
     }
 
@@ -323,6 +391,7 @@ fun HomeDashboardScreen(
             initialTitle = quickAddInitialTitle,
             initialMillis = quickAddInitialMillis,
             ambiguityNote = voiceAmbiguityNote,
+            preferences = preferences,
             onDismiss = { showQuickAddDialog = false },
             onSaveReminder = { title, triggerMs, priority ->
                 onQuickSaveReminder(
@@ -335,11 +404,17 @@ fun HomeDashboardScreen(
                 showQuickAddDialog = false
             },
             onSaveTask = { title, priority ->
+                val tomorrowDue = LocalDate.now()
+                    .plusDays(1)
+                    .atTime(23, 59)
+                    .atZone(ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
                 onQuickSaveTask(
                     TaskEntity(
                         title = title,
                         priority = priority.name,
-                        dueDateMillis = System.currentTimeMillis() + 86_400_000L,
+                        dueDateMillis = tomorrowDue,
                     ),
                 )
                 showQuickAddDialog = false
@@ -352,11 +427,32 @@ fun HomeDashboardScreen(
 private fun DailyBriefingHeroCard(
     homeState: HomeUiState,
     preferences: UserPreferences,
+    timeSyncStatus: NetworkTimeSyncStatus,
+    onSyncNetworkTime: () -> Unit,
+    onOpenOverdue: () -> Unit,
+    onOpenWorldClock: () -> Unit,
     onVoiceQuickAdd: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
+    val primaryZone = remember(preferences.primaryClockZone) {
+        preferences.primaryClockZone.toZoneId()
+    }
+    val hour = remember(homeState.nowMillis, primaryZone) {
+        Instant.ofEpochMilli(homeState.nowMillis).atZone(primaryZone).hour
+    }
+    val greeting = when (hour) {
+        in 5..11 -> "Good Morning"
+        in 12..16 -> "Good Afternoon"
+        in 17..21 -> "Good Evening"
+        else -> "Good Night"
+    }
+
     Card(
         shape = MaterialTheme.shapes.large,
+        border = BorderStroke(
+            1.25.dp,
+            Brush.linearGradient(listOf(extra.accentPrimary.copy(alpha = 0.55f), extra.accentSecondary.copy(alpha = 0.45f))),
+        ),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -372,9 +468,9 @@ private fun DailyBriefingHeroCard(
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                Color(0xEE080F24),
-                                Color(0xCC0B142E),
-                                Color(0x990D1836),
+                                Color(0xF0050C1F),
+                                Color(0xD809142E),
+                                Color(0xB20D1B3B),
                             ),
                         ),
                     ),
@@ -387,19 +483,65 @@ private fun DailyBriefingHeroCard(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column {
-                        Text(
-                            text = "RR DAILY BRIEFING",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = extra.accentPrimary,
-                        )
+                    Column(modifier = Modifier.weight(1f)) {
+                        val zoneLabel = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) {
+                            "INDIA (IST)"
+                        } else {
+                            "LOCAL (${primaryZone.id})"
+                        }
+                        val syncText = when {
+                            timeSyncStatus.ownerOverrideActive && !timeSyncStatus.ownerOverrideLabel.isNullOrBlank() ->
+                                timeSyncStatus.ownerOverrideLabel
+                            timeSyncStatus.isSynced -> timeSyncStatus.sourceLabel
+                            timeSyncStatus.isSyncing -> "Syncing..."
+                            else -> "Device Clock"
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = "$greeting • $zoneLabel",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = extra.accentPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = extra.accentPrimary.copy(alpha = 0.16f),
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onSyncNetworkTime)
+                                    .testTag("home_sync_time_pill"),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Sync,
+                                        contentDescription = "Sync real time from Google",
+                                        tint = extra.accentPrimary,
+                                        modifier = Modifier.size(11.dp),
+                                    )
+                                    Text(
+                                        text = syncText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White,
+                                    )
+                                }
+                            }
+                        }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = ScheduleCalculator.formatTime(
                                 millis = homeState.nowMillis,
                                 use24Hour = preferences.use24Hour,
+                                zoneId = primaryZone,
                                 includeSeconds = true,
                             ),
                             style = TabularClockLarge,
@@ -407,20 +549,149 @@ private fun DailyBriefingHeroCard(
                         )
                         Text(
                             text = ScheduleCalculator.formatDate(
-                                homeState.nowMillis,
-                                "EEEE, ${preferences.dateFormatStyle.pattern}",
+                                millis = homeState.nowMillis,
+                                pattern = "EEEE, ${preferences.dateFormatStyle.pattern}",
+                                zoneId = primaryZone,
                             ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFFB8C7EA),
                         )
                     }
-                    FilledTonalIconButton(
-                        onClick = onVoiceQuickAdd,
-                        modifier = Modifier.testTag("home_voice_add_btn"),
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Icon(Icons.Rounded.Mic, contentDescription = "Voice Quick Add")
+                        RRCircularProgressRing(
+                            progress = homeState.todayProgressFraction,
+                            size = 76.dp,
+                            strokeWidth = 7.dp,
+                            trackColor = Color.White.copy(alpha = 0.16f),
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "${(homeState.todayProgressFraction * 100).toInt()}%",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.White,
+                                )
+                                Text(
+                                    text = "${homeState.todayCompletedCount}/${homeState.todayTotalCount}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFB8C7EA),
+                                )
+                            }
+                        }
+                        FilledTonalIconButton(
+                            onClick = onVoiceQuickAdd,
+                            modifier = Modifier.testTag("home_voice_add_btn"),
+                        ) {
+                            Icon(Icons.Rounded.Mic, contentDescription = "Voice Quick Add")
+                        }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                val systemZone = ZoneId.systemDefault()
+                val showDeviceStrip = preferences.primaryClockZone == PrimaryClockZone.INDIA_IST &&
+                    systemZone != ScheduleCalculator.INDIA_ZONE
+                val stripZone = if (showDeviceStrip) systemZone else ScheduleCalculator.INDIA_ZONE
+                val stripTitle = if (showDeviceStrip) {
+                    "DEVICE LOCAL TIME (${systemZone.id})"
+                } else {
+                    "INDIA REAL TIME (IST • UTC+5:30)"
+                }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color.White.copy(alpha = 0.08f),
+                    border = BorderStroke(1.dp, extra.accentPrimary.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable(onClick = onOpenWorldClock)
+                        .testTag("home_india_time_card"),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(
+                                Icons.Rounded.Public,
+                                contentDescription = stripTitle,
+                                tint = extra.accentPrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Column {
+                                Text(
+                                    text = stripTitle,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = extra.accentPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = ScheduleCalculator.formatDate(
+                                        millis = homeState.nowMillis,
+                                        pattern = "EEEE, ${preferences.dateFormatStyle.pattern}",
+                                        zoneId = stripZone,
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFD6E3FF),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        Text(
+                            text = ScheduleCalculator.formatTime(
+                                millis = homeState.nowMillis,
+                                use24Hour = preferences.use24Hour,
+                                zoneId = stripZone,
+                                includeSeconds = true,
+                            ),
+                            style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize),
+                            color = Color.White,
+                        )
+                    }
+                }
+
+                if (homeState.overdueRemindersCount > 0) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.22f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable(onClick = onOpenOverdue),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.WarningAmber,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Text(
+                                text = "${homeState.overdueRemindersCount} overdue reminder(s) • Tap to review",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -428,13 +699,19 @@ private fun DailyBriefingHeroCard(
                 ) {
                     RRMetricBadge(
                         label = "Reminders",
-                        value = "${homeState.upcomingReminders.size}",
+                        value = "${homeState.totalRemindersCount}",
                         color = extra.accentPrimary,
                         modifier = Modifier.weight(1f),
                     )
                     RRMetricBadge(
-                        label = "Tasks",
-                        value = "${homeState.todayTasks.size}",
+                        label = "Pending",
+                        value = "${homeState.pendingTasksCount}",
+                        color = extra.warning,
+                        modifier = Modifier.weight(1f),
+                    )
+                    RRMetricBadge(
+                        label = "Done Tasks",
+                        value = "${homeState.completedTasksCount}",
                         color = extra.accentSecondary,
                         modifier = Modifier.weight(1f),
                     )
@@ -470,6 +747,7 @@ private fun QuickActionsStrip(
     onHabits: () -> Unit,
     onFocus: () -> Unit,
 ) {
+    val extra = LocalRRExtraColors.current
     val actions = listOf(
         QuickModuleTile("Reminders", Icons.Rounded.NotificationsActive, onReminders, "qa_reminders"),
         QuickModuleTile("Alarms", Icons.Rounded.Alarm, onAlarms, "qa_alarms"),
@@ -493,12 +771,12 @@ private fun QuickActionsStrip(
         ) {
             actions.forEach { item ->
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 2.dp,
+                    shape = RoundedCornerShape(18.dp),
+                    color = extra.glassFill,
+                    border = BorderStroke(1.dp, extra.cardBorder),
                     modifier = Modifier
-                        .width(86.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                        .width(88.dp)
+                        .clip(RoundedCornerShape(18.dp))
                         .clickable(onClick = item.onClick)
                         .testTag(item.tag),
                 ) {
@@ -510,13 +788,20 @@ private fun QuickActionsStrip(
                             modifier = Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(
+                                            extra.accentPrimary.copy(alpha = 0.22f),
+                                            extra.accentSecondary.copy(alpha = 0.16f),
+                                        ),
+                                    ),
+                                ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
                                 imageVector = item.icon,
                                 contentDescription = item.label,
-                                tint = MaterialTheme.colorScheme.primary,
+                                tint = extra.accentPrimary,
                                 modifier = Modifier.size(20.dp),
                             )
                         }
@@ -537,10 +822,12 @@ private fun QuickActionsStrip(
 @Composable
 private fun UpcomingRemindersCard(
     reminders: List<ReminderEntity>,
+    nowMillis: Long,
     preferences: UserPreferences,
     onViewAll: () -> Unit,
     onComplete: (ReminderEntity) -> Unit,
 ) {
+    val extra = LocalRRExtraColors.current
     RRCard {
         RRSectionHeader(
             title = "Upcoming Reminders",
@@ -557,6 +844,7 @@ private fun UpcomingRemindersCard(
         } else {
             reminders.forEach { item ->
                 val targetMs = item.snoozedUntilMillis ?: item.triggerAtMillis
+                val isOverdue = !item.isCompleted && targetMs < nowMillis
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -572,12 +860,16 @@ private fun UpcomingRemindersCard(
                         Text(
                             text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour)}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (isOverdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    if (isOverdue) {
+                        RRStatusPill(text = "Overdue", color = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
                     RRStatusPill(
                         text = ReminderPriority.fromName(item.priority).label,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = extra.accentPrimary,
                     )
                 }
             }
@@ -588,6 +880,7 @@ private fun UpcomingRemindersCard(
 @Composable
 private fun NextAlarmDashboardCard(
     nextAlarm: com.example.core.database.AlarmEntity?,
+    nowMillis: Long,
     preferences: UserPreferences,
     onClick: () -> Unit,
 ) {
@@ -616,7 +909,7 @@ private fun NextAlarmDashboardCard(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            text = ScheduleCalculator.formatCountdownDelta(nextAlarm.nextTriggerAtMillis),
+                            text = ScheduleCalculator.formatCountdownDelta(nextAlarm.nextTriggerAtMillis, nowMillis),
                             style = MaterialTheme.typography.bodySmall,
                             color = extra.accentPrimary,
                         )
@@ -633,6 +926,7 @@ private fun NextAlarmDashboardCard(
 @Composable
 private fun WeatherSummaryDashboardCard(
     homeState: HomeUiState,
+    preferences: UserPreferences,
     onClick: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
@@ -655,9 +949,12 @@ private fun WeatherSummaryDashboardCard(
                 )
                 Column {
                     if (weather != null) {
-                        Text("${weather.cityName} • ${weather.currentTempC.toInt()}°C", style = MaterialTheme.typography.titleMedium)
+                        val tempStr = WeatherUnits.formatTemp(weather.currentTempC, preferences.useFahrenheit)
+                        val feelsStr = WeatherUnits.formatTemp(weather.feelsLikeC, preferences.useFahrenheit)
+                        val windStr = WeatherUnits.formatWind(weather.windKmh, preferences.useMph, weather.windDirectionDeg)
+                        Text("${weather.cityName} • $tempStr", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "${WeatherCodeInterpreter.describe(weather.weatherCode)} • Feels ${weather.feelsLikeC.toInt()}°C • Wind ${weather.windKmh.toInt()} km/h",
+                            text = "${WeatherCodeInterpreter.describe(weather.weatherCode)} • Feels $feelsStr • Wind $windStr",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -761,6 +1058,7 @@ private fun QuickAddDialog(
     initialTitle: String,
     initialMillis: Long,
     ambiguityNote: String?,
+    preferences: UserPreferences,
     onDismiss: () -> Unit,
     onSaveReminder: (String, Long, ReminderPriority) -> Unit,
     onSaveTask: (String, ReminderPriority) -> Unit,
@@ -811,7 +1109,7 @@ private fun QuickAddDialog(
                 if (isReminder) {
                     Text(
                         text = if (initialTitle.isNotBlank() && ambiguityNote == null) {
-                            "Scheduled: ${ScheduleCalculator.formatTime(initialMillis, false)}"
+                            "Scheduled: ${ScheduleCalculator.formatTime(initialMillis, preferences.use24Hour)}"
                         } else {
                             "Schedule in: $delayHours hour(s)"
                         },

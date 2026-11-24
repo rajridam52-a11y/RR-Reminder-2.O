@@ -27,6 +27,7 @@ import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Types
+import kotlinx.coroutines.delay
 
 @JsonClass(generateAdapter = true)
 data class ChecklistLine(
@@ -44,7 +45,7 @@ private val checklistAdapter by lazy {
 fun NotesTabContent(
     notes: List<NoteEntity>,
     reminders: List<ReminderEntity>,
-    onSaveNote: (NoteEntity) -> Unit,
+    onSaveNote: (NoteEntity, ((Long) -> Unit)?) -> Unit,
     onTogglePin: (NoteEntity) -> Unit,
     onDeleteNote: (Long) -> Unit,
 ) {
@@ -111,7 +112,7 @@ fun NotesTabContent(
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 88.dp),
+                    contentPadding = PaddingValues(bottom = 96.dp),
                 ) {
                     items(filtered, key = { it.id }) { note ->
                         val itemsList = remember(note.checklistJson) {
@@ -162,7 +163,7 @@ fun NotesTabContent(
                                                     onCheckedChange = { checked ->
                                                         val updated = itemsList.toMutableList()
                                                         updated[idx] = line.copy(checked = checked)
-                                                        onSaveNote(note.copy(checklistJson = checklistAdapter.toJson(updated)))
+                                                        onSaveNote(note.copy(checklistJson = checklistAdapter.toJson(updated)), null)
                                                     },
                                                     modifier = Modifier.size(30.dp),
                                                 )
@@ -178,7 +179,10 @@ fun NotesTabContent(
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
                                         RRStatusPill(text = note.category, color = extra.accentSecondary)
                                         if (note.isPinned) {
                                             RRStatusPill(text = "Pinned", color = extra.accentPrimary, icon = Icons.Rounded.PushPin)
@@ -230,8 +234,9 @@ fun NotesTabContent(
             initial = editingNote,
             reminders = reminders,
             onDismiss = { showEditor = false },
+            onAutoSaveNote = onSaveNote,
             onSave = { saved ->
-                onSaveNote(saved)
+                onSaveNote(saved, null)
                 showEditor = false
             },
         )
@@ -257,8 +262,12 @@ private fun NoteEditorDialog(
     initial: NoteEntity?,
     reminders: List<ReminderEntity>,
     onDismiss: () -> Unit,
+    onAutoSaveNote: (NoteEntity, ((Long) -> Unit)?) -> Unit,
     onSave: (NoteEntity) -> Unit,
 ) {
+    val extra = LocalRRExtraColors.current
+    var currentNoteId by remember { mutableLongStateOf(initial?.id ?: 0L) }
+    var currentUuid by remember { mutableStateOf(initial?.uuid) }
     var title by remember { mutableStateOf(initial?.title ?: "") }
     var body by remember { mutableStateOf(initial?.body ?: "") }
     var isChecklist by remember { mutableStateOf(initial?.isChecklist ?: false) }
@@ -274,10 +283,59 @@ private fun NoteEditorDialog(
             addAll(parsed)
         }
     }
+    var autoSaveLabel by remember { mutableStateOf<String?>(null) }
+    var isSavingManually by remember { mutableStateOf(false) }
+
+    fun buildNoteEntity(): NoteEntity {
+        val base = initial ?: NoteEntity(title = title.trim())
+        return base.copy(
+            id = currentNoteId,
+            uuid = currentUuid ?: base.uuid,
+            title = title.trim().ifBlank { "Quick Note" },
+            body = body,
+            isChecklist = isChecklist,
+            checklistJson = checklistAdapter.toJson(checklistItems.toList()),
+            category = category,
+            isPinned = isPinned,
+            linkedReminderId = linkedReminderId,
+        )
+    }
+
+    val checklistSnapshot = checklistItems.toList()
+    LaunchedEffect(title, body, isChecklist, category, isPinned, linkedReminderId, checklistSnapshot) {
+        val hasContent = title.isNotBlank() || body.isNotBlank() || checklistSnapshot.isNotEmpty()
+        if (!hasContent || isSavingManually) return@LaunchedEffect
+        autoSaveLabel = "Saving..."
+        delay(900L)
+        if (!isSavingManually) {
+            val entity = buildNoteEntity()
+            currentUuid = entity.uuid
+            onAutoSaveNote(entity) { savedId ->
+                if (currentNoteId == 0L && savedId > 0L) {
+                    currentNoteId = savedId
+                }
+                autoSaveLabel = "Auto-saved"
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "New Note" else "Edit Note") },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(if (initial == null && currentNoteId == 0L) "New Note" else "Edit Note")
+                if (autoSaveLabel != null) {
+                    RRStatusPill(
+                        text = autoSaveLabel!!,
+                        color = if (autoSaveLabel == "Auto-saved") extra.success else extra.accentPrimary,
+                    )
+                }
+            }
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -397,22 +455,14 @@ private fun NoteEditorDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val entity = (initial ?: NoteEntity(title = title.trim())).copy(
-                        title = title.trim().ifBlank { "Quick Note" },
-                        body = body,
-                        isChecklist = isChecklist,
-                        checklistJson = checklistAdapter.toJson(checklistItems.toList()),
-                        category = category,
-                        isPinned = isPinned,
-                        linkedReminderId = linkedReminderId,
-                    )
-                    onSave(entity)
+                    isSavingManually = true
+                    onSave(buildNoteEntity())
                 },
                 enabled = title.isNotBlank() || body.isNotBlank() || checklistItems.isNotEmpty(),
-            ) { Text("Save") }
+            ) { Text("Done") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
 }

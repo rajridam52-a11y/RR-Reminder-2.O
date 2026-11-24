@@ -62,7 +62,7 @@ fun HabitsTabContent(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
         ) {
             item {
                 RRCard(accentGlow = true) {

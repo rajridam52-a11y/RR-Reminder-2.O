@@ -9,7 +9,9 @@ import android.content.Intent
 import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
+import com.example.RRReminderApp
 import com.example.core.database.RRDatabase
+import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.network.WeatherCodeInterpreter
 import com.example.core.network.WeatherUnits
@@ -62,11 +64,12 @@ class NextReminderWidgetProvider : AppWidgetProvider() {
                 val db = RRDatabase.getInstance(context)
                 val prefs = UserPreferencesRepository(context).getSnapshot()
                 val next = db.reminderDao().getAllActiveSync().firstOrNull()
+                val primaryZone = prefs.primaryClockZone.toZoneId()
                 appWidgetIds.forEach { id ->
                     val views = RemoteViews(context.packageName, R.layout.widget_next_reminder)
                     if (next != null) {
                         views.setTextViewText(R.id.widget_reminder_title, next.title)
-                        val timeText = "${ScheduleCalculator.formatDate(next.triggerAtMillis, prefs.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(next.triggerAtMillis, prefs.use24Hour)}"
+                        val timeText = "${ScheduleCalculator.formatDate(next.triggerAtMillis, prefs.dateFormatStyle.pattern, primaryZone)} • ${ScheduleCalculator.formatTime(next.triggerAtMillis, prefs.use24Hour, primaryZone)}"
                         views.setTextViewText(R.id.widget_reminder_time, timeText)
                     } else {
                         views.setTextViewText(R.id.widget_reminder_title, "All caught up")
@@ -93,12 +96,16 @@ class ClockWidgetProvider : AppWidgetProvider() {
                 val db = RRDatabase.getInstance(context)
                 val prefs = UserPreferencesRepository(context).getSnapshot()
                 val citiesCount = db.worldClockDao().getAllSync().size
-                val now = System.currentTimeMillis()
-                val istTime = ScheduleCalculator.formatTime(now, prefs.use24Hour, ScheduleCalculator.INDIA_ZONE, includeSeconds = false)
-                val istDate = ScheduleCalculator.formatDate(now, "EEE, MMM d", ScheduleCalculator.INDIA_ZONE)
+                val now = (context.applicationContext as? RRReminderApp)
+                    ?.container?.networkTimeProvider?.currentEpochMillis()
+                    ?: System.currentTimeMillis()
+                val zone = prefs.primaryClockZone.toZoneId()
+                val zoneCode = if (prefs.primaryClockZone == PrimaryClockZone.INDIA_IST) "IST" else zone.id.substringAfterLast("/")
+                val formattedTime = ScheduleCalculator.formatTime(now, prefs.use24Hour, zone, includeSeconds = false)
+                val formattedDate = ScheduleCalculator.formatDate(now, "EEE, MMM d", zone)
                 appWidgetIds.forEach { id ->
                     val views = RemoteViews(context.packageName, R.layout.widget_clock)
-                    views.setTextViewText(R.id.widget_clock_sub, "IST $istTime • $istDate ($citiesCount cities)")
+                    views.setTextViewText(R.id.widget_clock_sub, "$zoneCode $formattedTime • $formattedDate ($citiesCount cities)")
                     views.setOnClickPendingIntent(
                         R.id.widget_clock_root,
                         WidgetUpdateHelper.launchMainIntent(context, "worldclock", 502),

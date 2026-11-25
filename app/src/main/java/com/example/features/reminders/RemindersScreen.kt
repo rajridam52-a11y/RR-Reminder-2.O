@@ -201,6 +201,7 @@ fun RemindersScreen(
     if (showEditor) {
         ReminderEditorDialog(
             initial = editingReminder,
+            nowMillis = nowMillis,
             preferences = preferences,
             capturedLocation = capturedLocation,
             locationMessage = locationMessage,
@@ -283,8 +284,9 @@ private fun ReminderRowCard(
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))
+                val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
                 Text(
-                    text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour)}",
+                    text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern, primaryZone)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour, primaryZone)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (isOverdue) MaterialTheme.colorScheme.error else extra.accentPrimary,
                 )
@@ -374,6 +376,7 @@ private fun ReminderRowCard(
 @Composable
 private fun ReminderEditorDialog(
     initial: ReminderEntity?,
+    nowMillis: Long,
     preferences: UserPreferences,
     capturedLocation: SimpleLocation?,
     locationMessage: String?,
@@ -382,9 +385,10 @@ private fun ReminderEditorDialog(
     onSave: (ReminderEntity) -> Unit,
 ) {
     val context = LocalContext.current
-    val initialZdt = remember(initial) {
-        Instant.ofEpochMilli(initial?.triggerAtMillis ?: (System.currentTimeMillis() + 3_600_000L))
-            .atZone(ZoneId.systemDefault())
+    val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
+    val initialZdt = remember(initial, primaryZone) {
+        Instant.ofEpochMilli(initial?.triggerAtMillis ?: (nowMillis + 3_600_000L))
+            .atZone(primaryZone)
     }
 
     var title by remember { mutableStateOf(initial?.title ?: "") }
@@ -426,7 +430,7 @@ private fun ReminderEditorDialog(
             if (!spoken.isNullOrBlank()) {
                 val parsed = VoiceReminderParser.parse(spoken)
                 title = parsed.title
-                val zdt = Instant.ofEpochMilli(parsed.suggestedTriggerMillis).atZone(ZoneId.systemDefault())
+                val zdt = Instant.ofEpochMilli(parsed.suggestedTriggerMillis).atZone(primaryZone)
                 selectedDate = zdt.toLocalDate()
                 selectedHour = zdt.hour
                 selectedMinute = zdt.minute
@@ -688,7 +692,7 @@ private fun ReminderEditorDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val zone = ZoneId.systemDefault()
+                    val zone = primaryZone
                     val triggerZdt = ZonedDateTime.of(selectedDate, LocalTime.of(selectedHour, selectedMinute), zone)
                     val entity = (initial ?: ReminderEntity(title = title.trim(), triggerAtMillis = 0L)).copy(
                         title = title.trim(),

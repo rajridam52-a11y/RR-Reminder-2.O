@@ -41,6 +41,8 @@ import com.example.features.auth.AuthScreen
 import com.example.features.calendar.CalendarTabContent
 import com.example.features.focus.FocusAndRoutinesTabContent
 import com.example.features.habits.HabitsTabContent
+import com.example.features.health.SystemHealthScreen
+import com.example.features.health.SystemHealthViewModel
 import com.example.features.home.HomeDashboardScreen
 import com.example.features.home.MainViewModel
 import com.example.features.notes.NotesTabContent
@@ -68,7 +70,6 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 object RRRoutes {
@@ -80,6 +81,19 @@ object RRRoutes {
     const val SEARCH = "search"
     const val NOTIFICATIONS = "notifications"
     const val SETTINGS = "settings"
+    const val SYSTEM_HEALTH = "system_health"
+
+    val ALL_ROUTES = listOf(
+        HOME,
+        REMINDERS,
+        CLOCK_HUB,
+        WORKSPACE_HUB,
+        WEATHER,
+        SEARCH,
+        NOTIFICATIONS,
+        SETTINGS,
+        SYSTEM_HEALTH,
+    )
 }
 
 enum class TopNavTab(
@@ -131,19 +145,10 @@ fun RRAppRoot(
         val preAuthPrefs by container.effectivePreferences
             .collectAsStateWithLifecycle(initialValue = UserPreferences())
         val syncStatus by container.networkTimeProvider.syncStatus.collectAsStateWithLifecycle()
-        var preAuthNowMillis by remember { mutableLongStateOf(container.networkTimeProvider.currentEpochMillis()) }
+        val preAuthNowMillis by container.sharedNowMillis.collectAsStateWithLifecycle()
 
         LaunchedEffect(Unit) {
-            launch {
-                container.networkTimeProvider.syncNow()
-                preAuthNowMillis = container.networkTimeProvider.currentEpochMillis()
-            }
-            while (isActive) {
-                val now = container.networkTimeProvider.currentEpochMillis()
-                preAuthNowMillis = now
-                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
-                delay(waitMs)
-            }
+            container.syncClockAndEmit()
         }
 
         WelcomePreviewScreen(
@@ -212,6 +217,7 @@ private fun RRMainShell(
     val timerSwVm: TimerStopwatchViewModel = viewModel(key = uid, factory = TimerStopwatchViewModel.Factory(container))
     val prodVm: ProductivityViewModel = viewModel(key = uid, factory = ProductivityViewModel.Factory(container))
     val settingsVm: SettingsViewModel = viewModel(key = uid, factory = SettingsViewModel.Factory(container))
+    val healthVm: SystemHealthViewModel = viewModel(key = uid, factory = SystemHealthViewModel.Factory(container))
 
     val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
     val remoteConfig by mainViewModel.remoteConfig.collectAsStateWithLifecycle()
@@ -240,6 +246,13 @@ private fun RRMainShell(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: RRRoutes.HOME
     val showPrimaryNav = currentRoute in TopNavTab.entries.map { it.route }
+
+    LaunchedEffect(currentRoute) {
+        container.systemHealthChecker.updateNavigationTelemetry(
+            currentRoute = currentRoute,
+            knownRoutes = RRRoutes.ALL_ROUTES,
+        )
+    }
 
     RRBackgroundContainer {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -290,6 +303,7 @@ private fun RRMainShell(
                                 globalConfig = remoteConfig,
                                 timeSyncStatus = timeSyncStatus,
                                 onSyncNetworkTime = mainViewModel::syncNetworkTime,
+                                onCycleClockFace = mainViewModel::cycleClockFaceStyle,
                                 onNavigateReminders = { navController.navigateSingleTop(RRRoutes.REMINDERS) },
                                 onNavigateAlarms = {
                                     clockSubTab = 0
@@ -328,6 +342,7 @@ private fun RRMainShell(
                                     workspaceSubTab = 4
                                     navController.navigateSingleTop(RRRoutes.WORKSPACE_HUB)
                                 },
+                                onNavigateSystemHealth = { navController.navigate(RRRoutes.SYSTEM_HEALTH) },
                                 onNavigateSearch = { navController.navigate(RRRoutes.SEARCH) },
                                 onNavigateNotifications = { navController.navigate(RRRoutes.NOTIFICATIONS) },
                                 onNavigateSettings = { navController.navigate(RRRoutes.SETTINGS) },
@@ -636,6 +651,7 @@ private fun RRMainShell(
 
                         composable(RRRoutes.SETTINGS) {
                             val backupStatus by settingsVm.backupStatus.collectAsStateWithLifecycle()
+                            val healthReport by settingsVm.healthReport.collectAsStateWithLifecycle()
                             val settingsPrefs by settingsVm.preferences.collectAsStateWithLifecycle()
                             val settingsRemote by settingsVm.remoteConfig.collectAsStateWithLifecycle()
                             val settingsNow by settingsVm.nowMillis.collectAsStateWithLifecycle()
@@ -647,6 +663,7 @@ private fun RRMainShell(
                             SettingsScreen(
                                 preferences = settingsPrefs,
                                 backupStatus = backupStatus,
+                                healthReport = healthReport,
                                 currentUserEmail = currentUser.email,
                                 currentUserName = currentUser.displayName,
                                 isEmailVerified = currentUser.isEmailVerified,
@@ -662,8 +679,10 @@ private fun RRMainShell(
                                 onClearOwnerMessages = settingsVm::clearOwnerMessages,
                                 onSignOut = { settingsVm.signOut(credentialManager) },
                                 onBack = { navController.popBackStack() },
+                                onOpenSystemHealth = { navController.navigate(RRRoutes.SYSTEM_HEALTH) },
                                 onSetThemeMode = settingsVm::setThemeMode,
                                 onSetAccentPreset = settingsVm::setAccentPreset,
+                                onSetClockFaceStyle = settingsVm::setClockFaceStyle,
                                 onSetPrimaryClockZone = settingsVm::setPrimaryClockZone,
                                 onSetTimeFormatMode = settingsVm::setTimeFormatMode,
                                 onSetDateFormat = settingsVm::setDateFormat,
@@ -679,6 +698,22 @@ private fun RRMainShell(
                                 onExportBackup = settingsVm::exportBackupToUri,
                                 onImportBackup = settingsVm::importBackupFromUri,
                                 onClearBackupStatus = settingsVm::clearBackupStatus,
+                            )
+                        }
+
+                        composable(RRRoutes.SYSTEM_HEALTH) {
+                            val healthReport by healthVm.report.collectAsStateWithLifecycle()
+                            val healthPrefs by healthVm.preferences.collectAsStateWithLifecycle()
+                            val healthSync by healthVm.timeSyncStatus.collectAsStateWithLifecycle()
+                            SystemHealthScreen(
+                                report = healthReport,
+                                preferences = healthPrefs,
+                                timeSyncStatus = healthSync,
+                                onRunFullCheck = healthVm::runFullSystemCheck,
+                                onRunSingleCheck = healthVm::runSingleCheck,
+                                onSyncClock = healthVm::syncClockAndRecheck,
+                                onBuildDiagnosticReport = healthVm::buildDiagnosticReportText,
+                                onBack = { navController.popBackStack() },
                             )
                         }
                     }

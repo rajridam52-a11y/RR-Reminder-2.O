@@ -37,14 +37,20 @@ import com.example.core.common.VoiceReminderParser
 import com.example.core.database.ReminderEntity
 import com.example.core.database.ReminderPriority
 import com.example.core.database.TaskEntity
+import com.example.core.database.TimerEntity
+import com.example.core.database.WorldClockCityEntity
 import com.example.core.datastore.DashboardWidgetId
 import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.UserPreferences
 import com.example.core.firebase.GlobalAppConfig
+import com.example.core.health.HealthStatus
+import com.example.core.health.SystemHealthReport
 import com.example.core.network.NetworkTimeSyncStatus
 import com.example.core.network.WeatherCodeInterpreter
 import com.example.core.network.WeatherUnits
 import com.example.core.notifications.ScheduleCalculator
+import com.example.features.health.healthScoreColor
+import com.example.ui.components.AuroraClockDisplay
 import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
 import com.example.ui.components.RRCircularProgressRing
@@ -52,10 +58,8 @@ import com.example.ui.components.RRMetricBadge
 import com.example.ui.components.RRSectionHeader
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
-import com.example.ui.theme.TabularClockLarge
 import com.example.ui.theme.TabularClockMedium
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,6 +70,7 @@ fun HomeDashboardScreen(
     globalConfig: GlobalAppConfig? = null,
     timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
     onSyncNetworkTime: () -> Unit = {},
+    onCycleClockFace: () -> Unit = {},
     onNavigateReminders: () -> Unit,
     onNavigateAlarms: () -> Unit,
     onNavigateWeather: () -> Unit,
@@ -77,6 +82,7 @@ fun HomeDashboardScreen(
     onNavigateNotes: () -> Unit,
     onNavigateHabits: () -> Unit,
     onNavigateFocus: () -> Unit,
+    onNavigateSystemHealth: () -> Unit = {},
     onNavigateSearch: () -> Unit,
     onNavigateNotifications: () -> Unit,
     onNavigateSettings: () -> Unit,
@@ -92,7 +98,7 @@ fun HomeDashboardScreen(
     var showCustomizeSheet by remember { mutableStateOf(false) }
     var showQuickAddDialog by remember { mutableStateOf(false) }
     var quickAddInitialTitle by remember { mutableStateOf("") }
-    var quickAddInitialMillis by remember { mutableLongStateOf(System.currentTimeMillis() + 3_600_000L) }
+    var quickAddInitialMillis by remember { mutableLongStateOf(homeState.nowMillis + 3_600_000L) }
     var voiceAmbiguityNote by remember { mutableStateOf<String?>(null) }
 
     val voiceLauncher = rememberLauncherForActivityResult(
@@ -183,7 +189,7 @@ fun HomeDashboardScreen(
             FloatingActionButton(
                 onClick = {
                     quickAddInitialTitle = ""
-                    quickAddInitialMillis = System.currentTimeMillis() + 3_600_000L
+                    quickAddInitialMillis = homeState.nowMillis + 3_600_000L
                     voiceAmbiguityNote = null
                     showQuickAddDialog = true
                 },
@@ -258,6 +264,7 @@ fun HomeDashboardScreen(
                             preferences = preferences,
                             timeSyncStatus = timeSyncStatus,
                             onSyncNetworkTime = onSyncNetworkTime,
+                            onCycleClockFace = onCycleClockFace,
                             onOpenOverdue = onNavigateReminders,
                             onOpenWorldClock = onNavigateWorldClock,
                             onVoiceQuickAdd = {
@@ -290,6 +297,7 @@ fun HomeDashboardScreen(
                             onNotes = onNavigateNotes,
                             onHabits = onNavigateHabits,
                             onFocus = onNavigateFocus,
+                            onSystemHealth = onNavigateSystemHealth,
                         )
 
                         DashboardWidgetId.UPCOMING_REMINDERS.key -> UpcomingRemindersCard(
@@ -307,16 +315,34 @@ fun HomeDashboardScreen(
                             onClick = onNavigateAlarms,
                         )
 
+                        DashboardWidgetId.ACTIVE_TIMERS.key -> ActiveTimersDashboardCard(
+                            timers = homeState.activeTimers,
+                            nowMillis = homeState.nowMillis,
+                            onClick = onNavigateTimer,
+                        )
+
                         DashboardWidgetId.WEATHER.key -> WeatherSummaryDashboardCard(
                             homeState = homeState,
                             preferences = preferences,
                             onClick = onNavigateWeather,
                         )
 
+                        DashboardWidgetId.WORLD_CLOCK.key -> WorldClockPreviewCard(
+                            cities = homeState.worldClockCities,
+                            nowMillis = homeState.nowMillis,
+                            preferences = preferences,
+                            onClick = onNavigateWorldClock,
+                        )
+
                         DashboardWidgetId.TODAY_TASKS.key -> TodayTasksDashboardCard(
                             homeState = homeState,
                             onViewAll = onNavigateTasks,
                             onToggleTask = onQuickToggleTask,
+                        )
+
+                        DashboardWidgetId.SYSTEM_HEALTH.key -> SystemHealthDashboardCard(
+                            report = homeState.healthReport,
+                            onClick = onNavigateSystemHealth,
                         )
 
                         DashboardWidgetId.RECENT_ACTIVITY.key -> RecentActivityCard(
@@ -387,9 +413,11 @@ fun HomeDashboardScreen(
     }
 
     if (showQuickAddDialog) {
+        val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
         QuickAddDialog(
             initialTitle = quickAddInitialTitle,
             initialMillis = quickAddInitialMillis,
+            nowMillis = homeState.nowMillis,
             ambiguityNote = voiceAmbiguityNote,
             preferences = preferences,
             onDismiss = { showQuickAddDialog = false },
@@ -399,15 +427,18 @@ fun HomeDashboardScreen(
                         title = title,
                         triggerAtMillis = triggerMs,
                         priority = priority.name,
+                        zoneId = primaryZone.id,
                     ),
                 )
                 showQuickAddDialog = false
             },
             onSaveTask = { title, priority ->
-                val tomorrowDue = LocalDate.now()
+                val tomorrowDue = Instant.ofEpochMilli(homeState.nowMillis)
+                    .atZone(primaryZone)
+                    .toLocalDate()
                     .plusDays(1)
                     .atTime(23, 59)
-                    .atZone(ZoneId.systemDefault())
+                    .atZone(primaryZone)
                     .toInstant()
                     .toEpochMilli()
                 onQuickSaveTask(
@@ -429,6 +460,7 @@ private fun DailyBriefingHeroCard(
     preferences: UserPreferences,
     timeSyncStatus: NetworkTimeSyncStatus,
     onSyncNetworkTime: () -> Unit,
+    onCycleClockFace: () -> Unit,
     onOpenOverdue: () -> Unit,
     onOpenWorldClock: () -> Unit,
     onVoiceQuickAdd: () -> Unit,
@@ -535,26 +567,41 @@ private fun DailyBriefingHeroCard(
                                     )
                                 }
                             }
+                            Surface(
+                                shape = CircleShape,
+                                color = Color.White.copy(alpha = 0.12f),
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onCycleClockFace)
+                                    .testTag("home_clock_face_pill"),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.WatchLater,
+                                        contentDescription = "Switch clock face",
+                                        tint = extra.accentSecondary,
+                                        modifier = Modifier.size(11.dp),
+                                    )
+                                    Text(
+                                        text = preferences.clockFaceStyle.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = ScheduleCalculator.formatTime(
-                                millis = homeState.nowMillis,
-                                use24Hour = preferences.use24Hour,
-                                zoneId = primaryZone,
-                                includeSeconds = true,
-                            ),
-                            style = TabularClockLarge,
-                            color = Color.White,
-                        )
-                        Text(
-                            text = ScheduleCalculator.formatDate(
-                                millis = homeState.nowMillis,
-                                pattern = "EEEE, ${preferences.dateFormatStyle.pattern}",
-                                zoneId = primaryZone,
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFFB8C7EA),
+                        Spacer(modifier = Modifier.height(6.dp))
+                        AuroraClockDisplay(
+                            nowMillis = homeState.nowMillis,
+                            zoneId = primaryZone,
+                            use24Hour = preferences.use24Hour,
+                            datePattern = preferences.dateFormatStyle.pattern,
+                            faceStyle = preferences.clockFaceStyle,
                         )
                     }
 
@@ -746,6 +793,7 @@ private fun QuickActionsStrip(
     onNotes: () -> Unit,
     onHabits: () -> Unit,
     onFocus: () -> Unit,
+    onSystemHealth: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
     val actions = listOf(
@@ -754,6 +802,7 @@ private fun QuickActionsStrip(
         QuickModuleTile("Timer", Icons.Rounded.Timer, onTimer, "qa_timer"),
         QuickModuleTile("Stopwatch", Icons.Rounded.AvTimer, onStopwatch, "qa_stopwatch"),
         QuickModuleTile("World Clock", Icons.Rounded.Public, onWorldClock, "qa_worldclock"),
+        QuickModuleTile("System Health", Icons.Rounded.HealthAndSafety, onSystemHealth, "qa_system_health"),
         QuickModuleTile("Calendar", Icons.Rounded.CalendarMonth, onCalendar, "qa_calendar"),
         QuickModuleTile("Tasks", Icons.Rounded.CheckCircleOutline, onTasks, "qa_tasks"),
         QuickModuleTile("Notes", Icons.Rounded.EditNote, onNotes, "qa_notes"),
@@ -842,6 +891,7 @@ private fun UpcomingRemindersCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
+            val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
             reminders.forEach { item ->
                 val targetMs = item.snoozedUntilMillis ?: item.triggerAtMillis
                 val isOverdue = !item.isCompleted && targetMs < nowMillis
@@ -858,7 +908,7 @@ private fun UpcomingRemindersCard(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(item.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour)}",
+                            text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern, primaryZone)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour, primaryZone)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = if (isOverdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1054,9 +1104,221 @@ private fun RecentActivityCard(items: List<String>) {
 }
 
 @Composable
+private fun ActiveTimersDashboardCard(
+    timers: List<TimerEntity>,
+    nowMillis: Long,
+    onClick: () -> Unit,
+) {
+    val extra = LocalRRExtraColors.current
+    RRCard(onClick = onClick) {
+        RRSectionHeader(
+            title = "Active Timers",
+            actionLabel = "Timers",
+            onActionClick = onClick,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        if (timers.isEmpty()) {
+            Text(
+                text = "No running timers. Tap to start a countdown or preset.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            timers.forEach { timer ->
+                val remaining = if (timer.isRunning && timer.endEpochMillis != null) {
+                    (timer.endEpochMillis - nowMillis).coerceAtLeast(0L)
+                } else {
+                    timer.remainingMillis
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(
+                            Icons.Rounded.Timer,
+                            contentDescription = null,
+                            tint = if (timer.isRunning) extra.accentPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = timer.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    RRStatusPill(
+                        text = ScheduleCalculator.formatDurationMillis(remaining),
+                        color = if (timer.isRunning) extra.accentPrimary else extra.warning,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorldClockPreviewCard(
+    cities: List<WorldClockCityEntity>,
+    nowMillis: Long,
+    preferences: UserPreferences,
+    onClick: () -> Unit,
+) {
+    val extra = LocalRRExtraColors.current
+    RRCard(onClick = onClick) {
+        RRSectionHeader(
+            title = "World Clock Previews",
+            actionLabel = "Manage",
+            onActionClick = onClick,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        if (cities.isEmpty()) {
+            Text(
+                text = "Add global cities to track live timezones and day/night cycles.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                cities.forEach { city ->
+                    val zone = remember(city.zoneId) {
+                        runCatching { ZoneId.of(city.zoneId) }.getOrElse { ZoneId.systemDefault() }
+                    }
+                    val zdt = Instant.ofEpochMilli(nowMillis).atZone(zone)
+                    val isDay = zdt.hour in 6..18
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = extra.glassElevatedFill,
+                        border = BorderStroke(1.dp, extra.cardBorder),
+                        modifier = Modifier.width(142.dp),
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = if (isDay) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                                    contentDescription = if (isDay) "Daytime" else "Nighttime",
+                                    tint = if (isDay) extra.warning else extra.info,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = city.cityName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = ScheduleCalculator.formatTime(
+                                    millis = nowMillis,
+                                    use24Hour = preferences.use24Hour,
+                                    zoneId = zone,
+                                ),
+                                style = TabularClockMedium,
+                            )
+                            Text(
+                                text = if (zone.rules.isDaylightSavings(Instant.ofEpochMilli(nowMillis))) "DST Active" else zone.id.substringAfter("/"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemHealthDashboardCard(
+    report: SystemHealthReport,
+    onClick: () -> Unit,
+) {
+    val extra = LocalRRExtraColors.current
+    val scoreColor = healthScoreColor(report.overallHealthPercent)
+    RRCard(
+        onClick = onClick,
+        modifier = Modifier.testTag("home_system_health_card"),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                RRCircularProgressRing(
+                    progress = report.overallHealthPercent / 100f,
+                    size = 48.dp,
+                    strokeWidth = 5.dp,
+                    primaryColor = scoreColor,
+                    secondaryColor = extra.accentSecondary,
+                ) {
+                    Text(
+                        text = "${report.overallHealthPercent}%",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = scoreColor,
+                    )
+                }
+                Column {
+                    Text("RR System Health", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = when {
+                            report.isScanning -> "Running diagnostics..."
+                            report.issueCount > 0 -> "${report.issueCount} attention item(s) • ${report.workingCount}/${report.items.size} working"
+                            report.testedCount > 0 -> "${report.workingCount}/${report.items.size} verified healthy"
+                            else -> "Tap to inspect all 17 system modules"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (report.issueCount > 0) {
+                    RRStatusPill(
+                        text = "${report.issueCount} Issue",
+                        color = if (report.items.any { it.status == HealthStatus.FAILED }) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            extra.warning
+                        },
+                    )
+                }
+                Icon(Icons.Rounded.ChevronRight, contentDescription = "Open RR System Health")
+            }
+        }
+    }
+}
+
+@Composable
 private fun QuickAddDialog(
     initialTitle: String,
     initialMillis: Long,
+    nowMillis: Long,
     ambiguityNote: String?,
     preferences: UserPreferences,
     onDismiss: () -> Unit,
@@ -1106,10 +1368,11 @@ private fun QuickAddDialog(
                         .fillMaxWidth()
                         .testTag("quick_add_title_input"),
                 )
+                val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
                 if (isReminder) {
                     Text(
                         text = if (initialTitle.isNotBlank() && ambiguityNote == null) {
-                            "Scheduled: ${ScheduleCalculator.formatTime(initialMillis, preferences.use24Hour)}"
+                            "Scheduled: ${ScheduleCalculator.formatTime(initialMillis, preferences.use24Hour, primaryZone)}"
                         } else {
                             "Schedule in: $delayHours hour(s)"
                         },
@@ -1145,7 +1408,7 @@ private fun QuickAddDialog(
                             val targetMs = if (initialTitle.isNotBlank() && ambiguityNote == null) {
                                 initialMillis
                             } else {
-                                System.currentTimeMillis() + delayHours * 3_600_000L
+                                nowMillis + delayHours * 3_600_000L
                             }
                             onSaveReminder(trimmed, targetMs, priority)
                         } else {

@@ -12,6 +12,7 @@ import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.firebase.GlobalAppConfig
 import com.example.core.firebase.OwnerConfigRepository
 import com.example.core.firebase.resolveEffectivePreferences
+import com.example.core.health.SystemHealthChecker
 import com.example.core.location.LocationHelper
 import com.example.core.network.NetworkModule
 import com.example.core.network.NetworkTimeProvider
@@ -20,14 +21,26 @@ import com.example.core.notifications.RRNotificationManager
 import com.example.core.notifications.ReminderAlarmScheduler
 import com.example.data.*
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
+    private val containerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val database: RRDatabase by lazy { RRDatabase.getInstance(appContext) }
     val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository(appContext) }
@@ -44,6 +57,48 @@ class AppContainer(context: Context) {
     val backupManager: BackupManager by lazy { BackupManager(database) }
     val aiAssistantRepository: AiAssistantRepository by lazy { AiAssistantRepository() }
     val networkTimeProvider: NetworkTimeProvider by lazy { NetworkTimeProvider(NetworkModule.httpClient) }
+
+    private val clockRefreshSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 2)
+
+    val sharedNowMillis: StateFlow<Long> = merge(
+        flow {
+            while (currentCoroutineContext().isActive) {
+                val now = networkTimeProvider.currentEpochMillis()
+                emit(now)
+                val sleepMs = (1000L - (now % 1000L)).coerceIn(50L, 1000L)
+                delay(sleepMs)
+            }
+        },
+        flow {
+            clockRefreshSignal.collect {
+                emit(networkTimeProvider.currentEpochMillis())
+            }
+        },
+    ).stateIn(
+        scope = containerScope,
+        started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 2_000L),
+        initialValue = networkTimeProvider.currentEpochMillis(),
+    )
+
+    fun emitClockTick() {
+        clockRefreshSignal.tryEmit(Unit)
+    }
+
+    suspend fun syncClockAndEmit() {
+        networkTimeProvider.syncNow()
+        emitClockTick()
+    }
+
+    val systemHealthChecker: SystemHealthChecker by lazy {
+        SystemHealthChecker(
+            context = appContext,
+            database = database,
+            preferencesRepository = preferencesRepository,
+            effectivePreferences = effectivePreferences,
+            networkTimeProvider = networkTimeProvider,
+            notificationManager = notificationManager,
+        )
+    }
 
     private val _remoteGlobalConfig = MutableStateFlow<GlobalAppConfig?>(null)
     val remoteGlobalConfig: StateFlow<GlobalAppConfig?> = _remoteGlobalConfig.asStateFlow()
@@ -74,6 +129,7 @@ class AppContainer(context: Context) {
                 ),
             )
         }
+        emitClockTick()
     }
 
     fun clearRemoteOverrides() {

@@ -6,23 +6,23 @@ import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.core.datastore.ClockFaceStyle
 import com.example.core.datastore.DateFormatStyle
 import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.TimeFormatMode
 import com.example.core.datastore.UserPreferences
 import com.example.core.di.AppContainer
 import com.example.core.firebase.GlobalAppConfig
+import com.example.core.health.SystemHealthReport
 import com.example.features.auth.signOutFromGoogle
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -33,8 +33,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     val remoteConfig: StateFlow<GlobalAppConfig?> = container.remoteGlobalConfig
 
-    private val _nowMillis = MutableStateFlow(container.networkTimeProvider.currentEpochMillis())
-    val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
+    val nowMillis: StateFlow<Long> = container.sharedNowMillis
+
+    val healthReport: StateFlow<SystemHealthReport> = container.systemHealthChecker.report
 
     private val _backupStatus = MutableStateFlow<String?>(null)
     val backupStatus: StateFlow<String?> = _backupStatus.asStateFlow()
@@ -47,17 +48,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _ownerSaveError = MutableStateFlow<String?>(null)
     val ownerSaveError: StateFlow<String?> = _ownerSaveError.asStateFlow()
-
-    init {
-        viewModelScope.launch {
-            while (isActive) {
-                val now = container.networkTimeProvider.currentEpochMillis()
-                _nowMillis.value = now
-                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
-                delay(waitMs)
-            }
-        }
-    }
 
     fun currentBaseNetworkMillis(): Long = container.networkTimeProvider.baseNetworkEpochMillis()
 
@@ -112,6 +102,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setAccentPreset(preset: AccentPreset) {
         viewModelScope.launch { container.preferencesRepository.setAccentPreset(preset) }
+    }
+
+    fun setClockFaceStyle(style: ClockFaceStyle) {
+        viewModelScope.launch { container.preferencesRepository.setClockFaceStyle(style) }
     }
 
     fun setPrimaryClockZone(zone: PrimaryClockZone) {

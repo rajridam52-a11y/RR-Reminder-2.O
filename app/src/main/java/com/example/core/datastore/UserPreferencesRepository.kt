@@ -20,17 +20,33 @@ import kotlinx.coroutines.flow.map
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rr_user_prefs")
 
 enum class DashboardWidgetId(val key: String, val title: String) {
-    BRIEFING("briefing", "Daily Briefing"),
+    BRIEFING("briefing", "Live Clock & Briefing"),
     QUICK_ACTIONS("quick_actions", "Quick Actions"),
     UPCOMING_REMINDERS("upcoming_reminders", "Upcoming Reminders"),
     NEXT_ALARM("next_alarm", "Next Scheduled Alarm"),
+    ACTIVE_TIMERS("active_timers", "Active Timers"),
     WEATHER("weather", "Weather Summary"),
+    WORLD_CLOCK("world_clock", "World Clock Previews"),
     TODAY_TASKS("today_tasks", "Today's Tasks"),
+    SYSTEM_HEALTH("system_health", "RR System Health"),
     RECENT_ACTIVITY("recent_activity", "Recently Completed");
 
     companion object {
         val DEFAULT_ORDER = entries.map { it.key }
         fun fromKey(key: String): DashboardWidgetId? = entries.firstOrNull { it.key == key }
+    }
+}
+
+enum class ClockFaceStyle(val key: String, val label: String, val subtitle: String) {
+    DUAL_HYBRID("dual_hybrid", "Dual Hybrid", "Live analog dial + digital clock"),
+    AURORA_DIGITAL("aurora_digital", "Aurora Digital", "Bold glassmorphic digital readout"),
+    ANALOG_CHRONO("analog_chrono", "Analog Chrono", "Luminous precision circular dial"),
+    MINIMAL_SWISS("minimal_swiss", "Minimal Swiss", "Crisp geometric railway indices"),
+    NEON_ORBIT("neon_orbit", "Neon Orbit", "Orbital second ring & glow readout");
+
+    companion object {
+        fun fromKey(key: String?): ClockFaceStyle =
+            entries.firstOrNull { it.key == key } ?: DUAL_HYBRID
     }
 }
 
@@ -74,6 +90,7 @@ enum class PrimaryClockZone(val key: String, val label: String) {
 data class UserPreferences(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accentPreset: AccentPreset = AccentPreset.AURORA,
+    val clockFaceStyle: ClockFaceStyle = ClockFaceStyle.DUAL_HYBRID,
     val primaryClockZone: PrimaryClockZone = PrimaryClockZone.INDIA_IST,
     val timeFormatMode: TimeFormatMode = TimeFormatMode.SYSTEM,
     val use24Hour: Boolean = false,
@@ -114,6 +131,7 @@ class UserPreferencesRepository(private val context: Context) {
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_PRESET = stringPreferencesKey("accent_preset")
+        val CLOCK_FACE_STYLE = stringPreferencesKey("clock_face_style")
         val PRIMARY_CLOCK_ZONE = stringPreferencesKey("primary_clock_zone")
         val TIME_FORMAT_MODE = stringPreferencesKey("time_format_mode")
         val USE_24_HOUR = booleanPreferencesKey("use_24_hour")
@@ -174,6 +192,7 @@ class UserPreferencesRepository(private val context: Context) {
         UserPreferences(
             themeMode = ThemeMode.fromKey(prefs[Keys.THEME_MODE]),
             accentPreset = AccentPreset.fromKey(prefs[Keys.ACCENT_PRESET]),
+            clockFaceStyle = ClockFaceStyle.fromKey(prefs[Keys.CLOCK_FACE_STYLE]),
             primaryClockZone = PrimaryClockZone.fromKey(prefs[Keys.PRIMARY_CLOCK_ZONE]),
             timeFormatMode = timeFormatMode,
             use24Hour = resolved24Hour,
@@ -216,6 +235,10 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setAccentPreset(preset: AccentPreset) {
         context.dataStore.edit { it[Keys.ACCENT_PRESET] = preset.key }
+    }
+
+    suspend fun setClockFaceStyle(style: ClockFaceStyle) {
+        context.dataStore.edit { it[Keys.CLOCK_FACE_STYLE] = style.key }
     }
 
     suspend fun setPrimaryClockZone(zone: PrimaryClockZone) {

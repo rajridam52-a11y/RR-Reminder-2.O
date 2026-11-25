@@ -5,21 +5,19 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.core.ai.AssistantUiState
 import com.example.core.database.*
+import com.example.core.datastore.ClockFaceStyle
 import com.example.core.datastore.DashboardWidgetId
 import com.example.core.datastore.UserPreferences
 import com.example.core.di.AppContainer
 import com.example.core.firebase.GlobalAppConfig
+import com.example.core.health.SystemHealthReport
 import com.example.core.network.NetworkTimeSyncStatus
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 
 data class SmartSearchResults(
     val reminders: List<ReminderEntity> = emptyList(),
@@ -40,9 +38,12 @@ data class HomeUiState(
     val nowMillis: Long = System.currentTimeMillis(),
     val upcomingReminders: List<ReminderEntity> = emptyList(),
     val nextAlarm: AlarmEntity? = null,
+    val activeTimers: List<TimerEntity> = emptyList(),
     val weather: WeatherCacheEntity? = null,
+    val worldClockCities: List<WorldClockCityEntity> = emptyList(),
     val todayTasks: List<TaskWithSubtasks> = emptyList(),
     val recentCompleted: List<String> = emptyList(),
+    val healthReport: SystemHealthReport = SystemHealthReport(),
     val activeHabitsCount: Int = 0,
     val unreadNotificationsCount: Int = 0,
     val totalRemindersCount: Int = 0,
@@ -62,14 +63,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     val remoteConfig: StateFlow<GlobalAppConfig?> = container.remoteGlobalConfig
 
-    private val _splashFinished = MutableStateFlow(true)
-    val splashFinished: StateFlow<Boolean> = _splashFinished.asStateFlow()
-
-    private val _welcomeDismissed = MutableStateFlow(true)
-    val welcomeDismissed: StateFlow<Boolean> = _welcomeDismissed.asStateFlow()
-
-    private val _nowMillis = MutableStateFlow(container.networkTimeProvider.currentEpochMillis())
-    val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
+    val nowMillis: StateFlow<Long> = container.sharedNowMillis
 
     val timeSyncStatus: StateFlow<NetworkTimeSyncStatus> = container.networkTimeProvider.syncStatus
 
@@ -78,27 +72,37 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private var assistantJob: Job? = null
 
     val homeState: StateFlow<HomeUiState> = combine(
-        _nowMillis,
+        container.sharedNowMillis,
+        preferences,
         container.reminderRepository.reminders,
         container.alarmRepository.alarms,
+        container.timerRepository.timers,
         container.weatherRepository.weatherCache,
+        container.database.worldClockDao().observeCities(),
         container.taskRepository.tasksWithSubtasks,
         container.habitRepository.habits,
         container.database.notificationLogDao().observeUnreadCount(),
+        container.systemHealthChecker.report,
     ) { values ->
         val now = values[0] as Long
+        val prefs = values[1] as UserPreferences
         @Suppress("UNCHECKED_CAST")
-        val reminders = values[1] as List<ReminderEntity>
+        val reminders = values[2] as List<ReminderEntity>
         @Suppress("UNCHECKED_CAST")
-        val alarms = values[2] as List<AlarmEntity>
-        val weather = values[3] as WeatherCacheEntity?
+        val alarms = values[3] as List<AlarmEntity>
         @Suppress("UNCHECKED_CAST")
-        val tasks = values[4] as List<TaskWithSubtasks>
+        val timers = values[4] as List<TimerEntity>
+        val weather = values[5] as WeatherCacheEntity?
         @Suppress("UNCHECKED_CAST")
-        val habits = values[5] as List<HabitWithLogs>
-        val unread = values[6] as Int
+        val worldCities = values[6] as List<WorldClockCityEntity>
+        @Suppress("UNCHECKED_CAST")
+        val tasks = values[7] as List<TaskWithSubtasks>
+        @Suppress("UNCHECKED_CAST")
+        val habits = values[8] as List<HabitWithLogs>
+        val unread = values[9] as Int
+        val health = values[10] as SystemHealthReport
 
-        val zone = ZoneId.systemDefault()
+        val zone = prefs.primaryClockZone.toZoneId()
         val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
         val todayEpochDay = today.toEpochDay()
 
@@ -108,6 +112,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
         val nextAlarm = alarms.filter { it.isEnabled && it.nextTriggerAtMillis != null }
             .minByOrNull { it.nextTriggerAtMillis ?: Long.MAX_VALUE }
+
+        val activeTimers = timers.filter { it.isRunning || it.remainingMillis in 1 until it.durationMillis }
+            .sortedByDescending { it.isRunning }
 
         val openTasks = tasks.filter { !it.task.isCompleted }
         val completedTasksCount = tasks.count { it.task.isCompleted }
@@ -148,9 +155,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             nowMillis = now,
             upcomingReminders = activeReminders.take(4),
             nextAlarm = nextAlarm,
+            activeTimers = activeTimers.take(3),
             weather = weather,
+            worldClockCities = worldCities.take(4),
             todayTasks = openTasks.take(4),
             recentCompleted = recentDone,
+            healthReport = health,
             activeHabitsCount = activeHabits.size,
             unreadNotificationsCount = unread,
             totalRemindersCount = reminders.size,
@@ -221,36 +231,41 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            container.networkTimeProvider.syncNow()
-            _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+            container.syncClockAndEmit()
         }
         viewModelScope.launch {
             container.ownerConfigRepository.observeGlobalConfig().collect { res ->
                 res.onSuccess { cfg ->
                     container.applyRemoteGlobalConfig(cfg)
-                    _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
                 }
             }
         }
         viewModelScope.launch {
-            while (isActive) {
-                val now = container.networkTimeProvider.currentEpochMillis()
-                _nowMillis.value = now
-                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
-                delay(waitMs)
-            }
+            container.systemHealthChecker.runQuickStartupChecksIfNeeded()
         }
     }
 
     fun syncNetworkTime() {
         viewModelScope.launch {
-            container.networkTimeProvider.syncNow()
-            _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+            container.syncClockAndEmit()
         }
     }
 
     fun refreshClockNow() {
-        _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+        container.emitClockTick()
+    }
+
+    fun cycleClockFaceStyle() {
+        viewModelScope.launch {
+            val all = ClockFaceStyle.entries
+            val currentIdx = all.indexOf(preferences.value.clockFaceStyle).coerceAtLeast(0)
+            val next = all[(currentIdx + 1) % all.size]
+            container.preferencesRepository.setClockFaceStyle(next)
+        }
+    }
+
+    fun setClockFaceStyle(style: ClockFaceStyle) {
+        viewModelScope.launch { container.preferencesRepository.setClockFaceStyle(style) }
     }
 
     fun askProductivityAssistant(userPrompt: String) {
@@ -290,10 +305,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setSearchQuery(q: String) {
         _searchQuery.value = q
-    }
-
-    fun dismissWelcomePreview() {
-        _welcomeDismissed.value = true
     }
 
     fun completeOnboarding() {

@@ -38,11 +38,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -59,8 +55,7 @@ import com.example.core.notifications.ScheduleCalculator
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.RRReminderTheme
 import com.example.ui.theme.TabularClockLarge
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import java.time.ZoneId
 
 class AlarmRingActivity : ComponentActivity() {
 
@@ -83,10 +78,11 @@ class AlarmRingActivity : ComponentActivity() {
         val label = intent.getStringExtra(EXTRA_LABEL) ?: "Alarm"
         val isTimer = intent.getBooleanExtra(EXTRA_IS_TIMER, false)
         val snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE_MINUTES, 10)
-        val prefsRepo = (application as RRReminderApp).container.preferencesRepository
+        val container = (application as RRReminderApp).container
 
         setContent {
-            val prefs by prefsRepo.preferences.collectAsStateWithLifecycle(initialValue = UserPreferences())
+            val prefs by container.effectivePreferences.collectAsStateWithLifecycle(initialValue = UserPreferences())
+            val nowMs by container.sharedNowMillis.collectAsStateWithLifecycle()
             RRReminderTheme(
                 themeMode = prefs.themeMode,
                 accentPreset = prefs.accentPreset,
@@ -95,7 +91,9 @@ class AlarmRingActivity : ComponentActivity() {
                     label = label,
                     isTimer = isTimer,
                     snoozeMinutes = snoozeMinutes,
+                    nowMs = nowMs,
                     use24Hour = prefs.use24Hour,
+                    zoneId = prefs.primaryClockZone.toZoneId(),
                     onDismiss = {
                         sendBroadcast(
                             Intent(this, ReminderAlarmReceiver::class.java).apply {
@@ -137,20 +135,13 @@ private fun AlarmRingScreen(
     label: String,
     isTimer: Boolean,
     snoozeMinutes: Int,
+    nowMs: Long,
     use24Hour: Boolean,
+    zoneId: ZoneId,
     onDismiss: () -> Unit,
     onSnooze: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
-    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            val now = System.currentTimeMillis()
-            nowMs = now
-            val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
-            delay(waitMs)
-        }
-    }
 
     val pulse by rememberInfiniteTransition(label = "ringPulse").animateFloat(
         initialValue = 0.94f,
@@ -203,7 +194,12 @@ private fun AlarmRingScreen(
                 }
                 Spacer(modifier = Modifier.height(28.dp))
                 Text(
-                    text = ScheduleCalculator.formatTime(nowMs, use24Hour = use24Hour, includeSeconds = true),
+                    text = ScheduleCalculator.formatTime(
+                        millis = nowMs,
+                        use24Hour = use24Hour,
+                        zoneId = zoneId,
+                        includeSeconds = true,
+                    ),
                     style = TabularClockLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                 )

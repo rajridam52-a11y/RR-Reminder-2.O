@@ -34,6 +34,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
+import com.example.core.datastore.ClockFaceStyle
 import com.example.core.datastore.DateFormatStyle
 import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.TimeFormatMode
@@ -41,11 +43,14 @@ import com.example.core.datastore.UserPreferences
 import com.example.core.firebase.GlobalAppConfig
 import com.example.core.firebase.OWNER_ADMIN_EMAIL
 import com.example.core.firebase.OwnerTimeMode
+import com.example.core.health.SystemHealthReport
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
+import com.example.features.health.healthScoreColor
 import com.example.ui.components.RRBackgroundContainer
 import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
+import com.example.ui.components.RRCircularProgressRing
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.LocalRRExtraColors
@@ -60,6 +65,7 @@ import java.time.ZoneId
 fun SettingsScreen(
     preferences: UserPreferences,
     backupStatus: String?,
+    healthReport: SystemHealthReport = SystemHealthReport(),
     currentUserEmail: String? = null,
     currentUserName: String? = null,
     isEmailVerified: Boolean = false,
@@ -75,8 +81,10 @@ fun SettingsScreen(
     onClearOwnerMessages: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onBack: () -> Unit,
+    onOpenSystemHealth: () -> Unit = {},
     onSetThemeMode: (ThemeMode) -> Unit,
     onSetAccentPreset: (AccentPreset) -> Unit,
+    onSetClockFaceStyle: (ClockFaceStyle) -> Unit = {},
     onSetPrimaryClockZone: (PrimaryClockZone) -> Unit,
     onSetTimeFormatMode: (TimeFormatMode) -> Unit,
     onSetDateFormat: (DateFormatStyle) -> Unit,
@@ -97,6 +105,7 @@ fun SettingsScreen(
     val extra = LocalRRExtraColors.current
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
 
     val soundTitle = remember(preferences.notificationSoundUri) {
         val raw = preferences.notificationSoundUri
@@ -321,6 +330,22 @@ fun SettingsScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text("Live Clock Face", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            ClockFaceStyle.entries.forEach { face ->
+                                FilterChip(
+                                    selected = preferences.clockFaceStyle == face,
+                                    onClick = { onSetClockFaceStyle(face) },
+                                    label = { Text(face.label) },
+                                    modifier = Modifier.testTag("settings_clock_face_${face.key}"),
+                                )
                             }
                         }
                     }
@@ -640,31 +665,112 @@ fun SettingsScreen(
                 }
 
                 item {
-                    RRCard {
+                    val scoreColor = healthScoreColor(healthReport.overallHealthPercent)
+                    RRCard(
+                        onClick = onOpenSystemHealth,
+                        modifier = Modifier.testTag("settings_system_health_card"),
+                    ) {
                         Row(
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            RRBrandMark(size = 46.dp)
-                            Column {
-                                Text("RR Reminder", style = MaterialTheme.typography.titleMedium)
-                                Text("Your Time. Your Control.", style = MaterialTheme.typography.bodySmall, color = extra.accentPrimary)
-                                Text(
-                                    "Founder: Ridam Raj",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                Text(
-                                    "Aurora UI 2.0 • Cloud-Synced Preferences",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                RRCircularProgressRing(
+                                    progress = healthReport.overallHealthPercent / 100f,
+                                    size = 46.dp,
+                                    strokeWidth = 5.dp,
+                                    primaryColor = scoreColor,
+                                    secondaryColor = extra.accentSecondary,
+                                ) {
+                                    Text(
+                                        text = "${healthReport.overallHealthPercent}%",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = scoreColor,
+                                    )
+                                }
+                                Column {
+                                    Text("RR System Health Diagnostics", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = if (healthReport.testedCount > 0) {
+                                            "${healthReport.workingCount}/${healthReport.items.size} working • ${healthReport.issueCount} issue(s)"
+                                        } else {
+                                            "Inspect clock, APIs, permissions, database & storage"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = "Open RR System Health")
+                        }
+                    }
+                }
+
+                item {
+                    RRCard(onClick = { showAboutDialog = true }) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                RRBrandMark(size = 46.dp)
+                                Column {
+                                    Text(
+                                        "RR Reminder v${BuildConfig.VERSION_NAME}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Text(
+                                        "Your Time. Your Control.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = extra.accentPrimary,
+                                    )
+                                    Text(
+                                        "Founder: Ridam Raj",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        "Aurora UI 2.0 • Build ${BuildConfig.VERSION_CODE} • Cloud-Synced",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Icon(Icons.Rounded.Info, contentDescription = "About RR Reminder")
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            title = { Text("About RR Reminder ${BuildConfig.VERSION_NAME}") },
+            text = {
+                Text(
+                    "RR Reminder 2.0 — Next-Generation Smart Time-Management Suite\n\n" +
+                        "• Founder: Ridam Raj\n" +
+                        "• Engine: Network-Anchored Real-Time Clock + 5 Aurora Clock Faces\n" +
+                        "• Storage: Offline-First Room SQLite v2 + DataStore + JSON Backup\n" +
+                        "• Live Services: Open-Meteo Real Weather, Firebase Auth & Owner Sync, 17-Point RR System Health Diagnostics",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showAboutDialog = false }) { Text("Close") }
+            },
+        )
     }
 
     if (showPrivacyDialog) {

@@ -65,7 +65,7 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
             emitStopwatchState()
         }
 
-        // High-precision UI ticker for active timers & monotonic stopwatch
+        // High-precision UI ticker while stopwatch runs; 1s cadence when only countdown timers are active
         viewModelScope.launch {
             while (true) {
                 _timerTickNow.value = System.currentTimeMillis()
@@ -73,7 +73,7 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
                     emitStopwatchState()
                     delay(40L)
                 } else {
-                    delay(250L)
+                    delay(1000L)
                 }
             }
         }
@@ -144,9 +144,6 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
         val totalMs = currentStopwatchTotalNanos() / 1_000_000L
         val prevSum = swLaps.sum()
         val lapDuration = (totalMs - prevSum).coerceAtLeast(1L)
-        swLaps.add(0, lapDuration) // newest lap at index 0? Wait: keep chronological or index cleanly
-        // Wait: if we prepend, prevSum works either way! Let's keep chronological order in list and display reversed in UI for clarity.
-        swLaps.removeAt(0)
         swLaps.add(lapDuration)
         emitStopwatchState()
         persistStopwatch()

@@ -7,6 +7,8 @@ import com.example.core.database.BackupPayload
 import com.example.core.database.BackupReminder
 import com.example.core.database.ReminderEntity
 import com.example.core.database.RepeatType
+import com.example.core.datastore.ClockFaceStyle
+import com.example.core.datastore.DashboardWidgetId
 import com.example.core.datastore.DateFormatStyle
 import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.TimeFormatMode
@@ -15,6 +17,10 @@ import com.example.core.firebase.GlobalAppConfig
 import com.example.core.firebase.OWNER_ADMIN_EMAIL
 import com.example.core.firebase.isOwnerUser
 import com.example.core.firebase.resolveEffectivePreferences
+import com.example.core.health.HealthScoreCalculator
+import com.example.core.health.HealthStatus
+import com.example.core.health.SystemCheckId
+import com.example.core.health.SystemHealthItem
 import com.example.core.network.HourlyForecastItem
 import com.example.core.network.NetworkModule
 import com.example.core.network.NetworkTimeProvider
@@ -420,5 +426,55 @@ class RRReminderUnitTests {
         assertEquals(DateFormatStyle.ISO, merged.dateFormatStyle)
         assertTrue(merged.useFahrenheit)
         assertTrue(merged.useMph)
+    }
+
+    @Test
+    fun `system health score never inflates untested checks and calculates honest weighted percentage`() {
+        assertEquals(17, SystemCheckId.entries.size)
+
+        val untested = SystemCheckId.entries.map { SystemHealthItem(id = it, status = HealthStatus.NOT_TESTED) }
+        assertEquals(0, HealthScoreCalculator.computeHealthPercentage(untested))
+
+        val allWorking = SystemCheckId.entries.map { SystemHealthItem(id = it, status = HealthStatus.WORKING) }
+        assertEquals(100, HealthScoreCalculator.computeHealthPercentage(allWorking))
+
+        val mixed = listOf(
+            SystemHealthItem(SystemCheckId.LIVE_CLOCK, status = HealthStatus.WORKING), // 100
+            SystemHealthItem(SystemCheckId.WEATHER_API, status = HealthStatus.NOT_CONNECTED), // 30
+            SystemHealthItem(SystemCheckId.LOCATION_PERMISSION, status = HealthStatus.NEEDS_PERMISSION), // 35
+            SystemHealthItem(SystemCheckId.BACKGROUND_EXECUTION, status = HealthStatus.WARNING), // 65
+            SystemHealthItem(SystemCheckId.LOCAL_DATABASE, status = HealthStatus.FAILED), // 0
+        )
+        // (100 + 30 + 35 + 65 + 0) / 500 = 230 / 500 = 46%
+        assertEquals(46, HealthScoreCalculator.computeHealthPercentage(mixed))
+
+        val report = HealthScoreCalculator.summarize(
+            items = mixed,
+            isScanning = false,
+            activeCheckId = null,
+            lastFullScanMillis = 1_795_000_000_000L,
+        )
+        assertEquals(5, report.testedCount)
+        assertEquals(1, report.workingCount)
+        assertEquals(4, report.issueCount)
+
+        val text = HealthScoreCalculator.buildDiagnosticReportText(
+            report = report,
+            zoneId = ZoneId.of("Asia/Kolkata"),
+            appVersion = "2.0 (2)",
+        )
+        assertTrue(text.contains("RR SYSTEM HEALTH DIAGNOSTIC REPORT"))
+        assertTrue(text.contains("46%"))
+        assertTrue(text.contains("Weather API"))
+    }
+
+    @Test
+    fun `clock face styles and upgraded dashboard widget order resolve cleanly`() {
+        assertEquals(ClockFaceStyle.DUAL_HYBRID, ClockFaceStyle.fromKey(null))
+        assertEquals(ClockFaceStyle.ANALOG_CHRONO, ClockFaceStyle.fromKey("analog_chrono"))
+        assertEquals(ClockFaceStyle.NEON_ORBIT, ClockFaceStyle.fromKey("neon_orbit"))
+        assertTrue(DashboardWidgetId.DEFAULT_ORDER.contains(DashboardWidgetId.ACTIVE_TIMERS.key))
+        assertTrue(DashboardWidgetId.DEFAULT_ORDER.contains(DashboardWidgetId.WORLD_CLOCK.key))
+        assertTrue(DashboardWidgetId.DEFAULT_ORDER.contains(DashboardWidgetId.SYSTEM_HEALTH.key))
     }
 }

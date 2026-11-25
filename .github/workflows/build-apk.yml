@@ -70,7 +70,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: RR Reminder Latest APK
-          body: Automated Android APK build of RR Reminder from GitHub Actions. Download `RR-Reminder.apk` below to install on Android.
+          name: RR Reminder 2.0 Latest APK
+          body: Automated Android APK build of RR Reminder 2.0 from GitHub Actions. Download `RR-Reminder.apk` below to install directly on Android.
           files: RR-Reminder.apk
+          overwrite_files: true
           make_latest: true

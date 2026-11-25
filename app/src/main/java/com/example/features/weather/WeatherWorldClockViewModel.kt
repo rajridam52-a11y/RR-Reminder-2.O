@@ -11,9 +11,7 @@ import com.example.core.network.DailyForecastItem
 import com.example.core.network.GeocodingResultDto
 import com.example.core.network.HourlyForecastItem
 import com.example.core.network.NetworkTimeSyncStatus
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.ZoneId
 
@@ -76,8 +74,7 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
         container.database.worldClockDao().observeCities()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _nowMillis = MutableStateFlow(container.networkTimeProvider.currentEpochMillis())
-    val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
+    val nowMillis: StateFlow<Long> = container.sharedNowMillis
 
     val timeSyncStatus: StateFlow<NetworkTimeSyncStatus> = container.networkTimeProvider.syncStatus
 
@@ -97,17 +94,10 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
 
     init {
         viewModelScope.launch {
-            while (isActive) {
-                val now = container.networkTimeProvider.currentEpochMillis()
-                _nowMillis.value = now
-                val waitMs = (1000L - (now % 1000L)).coerceAtLeast(50L) + 10L
-                delay(waitMs)
-            }
-        }
-        viewModelScope.launch {
             val prefs = container.preferencesRepository.getSnapshot()
             val cache = container.database.weatherCacheDao().getCacheSync()
-            val isStale = cache == null || (System.currentTimeMillis() - cache.updatedAtMillis) > STALE_CACHE_MS
+            val now = container.networkTimeProvider.currentEpochMillis()
+            val isStale = cache == null || (now - cache.updatedAtMillis) > STALE_CACHE_MS
             if (container.locationHelper.hasLocationPermission() &&
                 container.locationHelper.isGpsEnabled() &&
                 !prefs.hasSavedWeatherLocation
@@ -121,13 +111,12 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
 
     fun syncNetworkTime() {
         viewModelScope.launch {
-            container.networkTimeProvider.syncNow()
-            _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+            container.syncClockAndEmit()
         }
     }
 
     fun refreshClockNow() {
-        _nowMillis.value = container.networkTimeProvider.currentEpochMillis()
+        container.emitClockTick()
     }
 
     fun refreshSavedWeather() {

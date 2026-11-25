@@ -74,6 +74,10 @@ class NetworkTimeProvider(
         }
     }
 
+    fun hasNetworkAnchor(): Boolean = syncedServerEpochMs != null
+
+    fun driftFromDeviceMillis(): Long = baseNetworkEpochMillis() - systemNowMsProvider()
+
     fun setOwnerTimeOverride(override: OwnerTimeOverride) {
         ownerOverride = override
         val label = if (!override.enabled || override.mode == "GOOGLE_AUTO") {

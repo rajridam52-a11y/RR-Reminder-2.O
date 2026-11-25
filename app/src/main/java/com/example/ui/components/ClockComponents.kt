@@ -22,7 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.Icon
@@ -542,6 +543,8 @@ fun LuminousLiveClockHero(
             ) {
                 previewCities.forEach { (cityName, tzId, _) ->
                     val cityZone = remember(tzId) { runCatching { ZoneId.of(tzId) }.getOrDefault(zoneId) }
+                    val cityZdt = remember(nowMillis, cityZone) { Instant.ofEpochMilli(nowMillis).atZone(cityZone) }
+                    val isCityDay = cityZdt.hour in 6..18
                     val cityTime = ScheduleCalculator.formatTime(
                         millis = nowMillis,
                         use24Hour = use24Hour,
@@ -562,10 +565,10 @@ fun LuminousLiveClockHero(
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = null,
-                                tint = Color(0xFFFBBF24),
-                                modifier = Modifier.size(13.dp),
+                                imageVector = if (isCityDay) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                                contentDescription = if (isCityDay) "Daytime" else "Nighttime",
+                                tint = if (isCityDay) Color(0xFFFBBF24) else Color(0xFF93C5FD),
+                                modifier = Modifier.size(14.dp),
                             )
                             Text(
                                 text = cityName,

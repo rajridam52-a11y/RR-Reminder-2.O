@@ -22,22 +22,24 @@ import kotlinx.coroutines.launch
 
 object WidgetUpdateHelper {
     fun updateAllWidgets(context: Context) {
-        val manager = AppWidgetManager.getInstance(context)
-        val providers = listOf(
-            NextReminderWidgetProvider::class.java,
-            ClockWidgetProvider::class.java,
-            WeatherWidgetProvider::class.java,
-            QuickAddWidgetProvider::class.java,
-            TimerWidgetProvider::class.java,
-        )
-        providers.forEach { cls ->
-            val ids = manager.getAppWidgetIds(ComponentName(context, cls))
-            if (ids.isNotEmpty()) {
-                val intent = Intent(context, cls).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+        runCatching {
+            val manager = AppWidgetManager.getInstance(context) ?: return
+            val providers = listOf(
+                NextReminderWidgetProvider::class.java,
+                ClockWidgetProvider::class.java,
+                WeatherWidgetProvider::class.java,
+                QuickAddWidgetProvider::class.java,
+                TimerWidgetProvider::class.java,
+            )
+            providers.forEach { cls ->
+                val ids = manager.getAppWidgetIds(ComponentName(context, cls))
+                if (ids.isNotEmpty()) {
+                    val intent = Intent(context, cls).apply {
+                        action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                    }
+                    context.sendBroadcast(intent)
                 }
-                context.sendBroadcast(intent)
             }
         }
     }

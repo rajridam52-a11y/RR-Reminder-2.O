@@ -9,9 +9,13 @@ import com.example.core.database.TimerEntity
 import com.example.core.database.TimerHistoryEntity
 import com.example.core.database.TimerPresetEntity
 import com.example.core.di.AppContainer
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class StopwatchUiState(
     val isRunning: Boolean = false,
@@ -24,7 +28,7 @@ data class StopwatchUiState(
 class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel() {
 
     val timers: StateFlow<List<TimerEntity>> = container.timerRepository.timers
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val presets: StateFlow<List<TimerPresetEntity>> = container.timerRepository.presets
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -42,41 +46,62 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
     private val _stopwatchState = MutableStateFlow(StopwatchUiState())
     val stopwatchState: StateFlow<StopwatchUiState> = _stopwatchState.asStateFlow()
 
+    private val persistMutex = Mutex()
     private var swRunning = false
     private var swStartNanos = 0L
     private var swAccumNanos = 0L
     private var swLaps = mutableListOf<Long>()
+    @Volatile
+    private var userInteractedStopwatch = false
+    private var stopwatchTickerJob: Job? = null
 
     init {
         viewModelScope.launch {
             val prefs = container.preferencesRepository.getSnapshot()
-            swRunning = prefs.stopwatchRunning
-            swStartNanos = prefs.stopwatchStartElapsedNanos
-            swAccumNanos = prefs.stopwatchAccumulatedNanos
-            swLaps = prefs.stopwatchLapsCsv
-                .split(",")
-                .mapNotNull { it.toLongOrNull() }
-                .toMutableList()
-            // Guard against reboot resetting elapsedRealtimeNanos below stored start
-            val nowMono = SystemClock.elapsedRealtimeNanos()
-            if (swRunning && nowMono < swStartNanos) {
-                swStartNanos = nowMono
-            }
-            emitStopwatchState()
-        }
-
-        // High-precision UI ticker while stopwatch runs; 1s cadence when only countdown timers are active
-        viewModelScope.launch {
-            while (true) {
-                _timerTickNow.value = System.currentTimeMillis()
+            if (!userInteractedStopwatch) {
+                swRunning = prefs.stopwatchRunning
+                swStartNanos = prefs.stopwatchStartElapsedNanos
+                swAccumNanos = prefs.stopwatchAccumulatedNanos
+                swLaps = prefs.stopwatchLapsCsv
+                    .split(",")
+                    .mapNotNull { it.toLongOrNull() }
+                    .toMutableList()
+                // Guard against reboot resetting elapsedRealtimeNanos below stored start
+                val nowMono = SystemClock.elapsedRealtimeNanos()
+                if (swRunning && nowMono < swStartNanos) {
+                    swStartNanos = nowMono
+                }
+                emitStopwatchState()
                 if (swRunning) {
-                    emitStopwatchState()
-                    delay(40L)
-                } else {
-                    delay(1000L)
+                    startStopwatchTicker()
                 }
             }
         }
+
+        // Responsive countdown timer clock ticker (250ms while any timer runs, 1s otherwise)
+        viewModelScope.launch {
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                _timerTickNow.value = now
+                val hasRunningTimer = timers.value.any { it.isRunning }
+                delay(if (hasRunningTimer) 250L else 1000L)
+            }
+        }
+    }
+
+    private fun startStopwatchTicker() {
+        if (stopwatchTickerJob?.isActive == true) return
+        stopwatchTickerJob = viewModelScope.launch {
+            while (isActive && swRunning) {
+                emitStopwatchState()
+                delay(33L)
+            }
+        }
+    }
+
+    private fun stopStopwatchTicker() {
+        stopwatchTickerJob?.cancel()
+        stopwatchTickerJob = null
     }
 
     private fun currentStopwatchTotalNanos(): Long {
@@ -111,35 +136,45 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
     }
 
     private fun persistStopwatch() {
+        val runningSnap = swRunning
+        val startSnap = swStartNanos
+        val accumSnap = swAccumNanos
         val csv = swLaps.joinToString(",")
         viewModelScope.launch {
-            container.preferencesRepository.saveStopwatchState(
-                running = swRunning,
-                startElapsedNanos = swStartNanos,
-                accumulatedNanos = swAccumNanos,
-                lapsCsv = csv,
-            )
+            persistMutex.withLock {
+                container.preferencesRepository.saveStopwatchState(
+                    running = runningSnap,
+                    startElapsedNanos = startSnap,
+                    accumulatedNanos = accumSnap,
+                    lapsCsv = csv,
+                )
+            }
         }
     }
 
     fun startStopwatch() {
+        userInteractedStopwatch = true
         if (swRunning) return
         swStartNanos = SystemClock.elapsedRealtimeNanos()
         swRunning = true
         emitStopwatchState()
+        startStopwatchTicker()
         persistStopwatch()
     }
 
     fun pauseStopwatch() {
+        userInteractedStopwatch = true
         if (!swRunning) return
         swAccumNanos = currentStopwatchTotalNanos()
         swRunning = false
         swStartNanos = 0L
+        stopStopwatchTicker()
         emitStopwatchState()
         persistStopwatch()
     }
 
     fun recordLap() {
+        userInteractedStopwatch = true
         if (!swRunning && swAccumNanos == 0L) return
         val totalMs = currentStopwatchTotalNanos() / 1_000_000L
         val prevSum = swLaps.sum()
@@ -150,6 +185,7 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
     }
 
     fun resetStopwatch(saveSessionLabel: String? = null) {
+        userInteractedStopwatch = true
         val totalMs = currentStopwatchTotalNanos() / 1_000_000L
         val lapsCopy = swLaps.toList()
         if (!saveSessionLabel.isNullOrBlank() && totalMs > 0L) {
@@ -167,6 +203,7 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
         swStartNanos = 0L
         swAccumNanos = 0L
         swLaps.clear()
+        stopStopwatchTicker()
         emitStopwatchState()
         persistStopwatch()
     }

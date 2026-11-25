@@ -4,10 +4,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import com.example.RRReminderApp
 import com.example.core.database.AlarmHistoryEntity
 import com.example.core.database.RRDatabase
 import com.example.core.database.ReminderPriority
-import com.example.core.database.TimerHistoryEntity
 import com.example.core.datastore.UserPreferencesRepository
 import com.example.widgets.WidgetUpdateHelper
 import kotlinx.coroutines.CoroutineScope
@@ -143,7 +143,18 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                 putExtra(AlarmForegroundService.EXTRA_RINGTONE_URI, alarm.ringtoneUri)
                                 putExtra(AlarmForegroundService.EXTRA_SNOOZE_MINUTES, alarm.snoozeMinutes)
                             }
-                            ContextCompat.startForegroundService(appContext, serviceIntent)
+                            runCatching {
+                                ContextCompat.startForegroundService(appContext, serviceIntent)
+                            }.onFailure {
+                                notifManager.postSimpleNotification(
+                                    id = AlarmForegroundService.FOREGROUND_NOTIFICATION_ID,
+                                    channelId = RRChannels.ALARMS,
+                                    title = "Alarm: ${alarm.label}",
+                                    body = "Tap to open RR Reminder",
+                                    sourceType = "ALARM",
+                                    sourceId = alarm.id,
+                                )
+                            }
                         }
                     }
 
@@ -184,42 +195,33 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                     }
 
                     ACTION_FIRE_TIMER -> if (id > 0) {
-                        val timer = db.timerDao().getById(id)
-                        if (timer != null) {
-                            db.timerDao().insertHistory(
-                                TimerHistoryEntity(
-                                    label = timer.label,
-                                    durationMillis = timer.durationMillis,
-                                ),
-                            )
-                            if (timer.isRepeat) {
-                                val nextEnd = System.currentTimeMillis() + timer.durationMillis
-                                val restarted = timer.copy(
-                                    remainingMillis = timer.durationMillis,
-                                    endEpochMillis = nextEnd,
-                                    isRunning = true,
-                                )
-                                db.timerDao().updateTimer(restarted)
-                                scheduler.scheduleTimer(restarted)
-                            } else {
-                                db.timerDao().updateTimer(
-                                    timer.copy(
-                                        remainingMillis = 0L,
-                                        endEpochMillis = null,
-                                        isRunning = false,
-                                    ),
-                                )
-                            }
-
+                        val timerRepo = (appContext as? RRReminderApp)?.container?.timerRepository
+                        val finalized = timerRepo?.finalizeExpiredTimer(
+                            timerId = id,
+                            nowMillis = System.currentTimeMillis(),
+                            fromReceiver = true,
+                        )
+                        if (finalized != null) {
                             val serviceIntent = Intent(appContext, AlarmForegroundService::class.java).apply {
                                 this.action = AlarmForegroundService.ACTION_START
-                                putExtra(AlarmForegroundService.EXTRA_ID, timer.id)
-                                putExtra(AlarmForegroundService.EXTRA_LABEL, timer.label)
+                                putExtra(AlarmForegroundService.EXTRA_ID, finalized.id)
+                                putExtra(AlarmForegroundService.EXTRA_LABEL, finalized.label)
                                 putExtra(AlarmForegroundService.EXTRA_IS_TIMER, true)
                                 putExtra(AlarmForegroundService.EXTRA_VIBRATE, prefs?.vibrationEnabled ?: true)
                                 putExtra(AlarmForegroundService.EXTRA_GRADUAL_VOLUME, false)
                             }
-                            ContextCompat.startForegroundService(appContext, serviceIntent)
+                            runCatching {
+                                ContextCompat.startForegroundService(appContext, serviceIntent)
+                            }.onFailure {
+                                notifManager.postSimpleNotification(
+                                    id = AlarmForegroundService.FOREGROUND_NOTIFICATION_ID,
+                                    channelId = RRChannels.TIMERS,
+                                    title = "Timer Finished: ${finalized.label}",
+                                    body = "Countdown completed",
+                                    sourceType = "TIMER",
+                                    sourceId = finalized.id,
+                                )
+                            }
                         }
                     }
 

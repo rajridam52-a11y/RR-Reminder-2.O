@@ -15,7 +15,10 @@ import com.example.core.network.NetworkTimeSyncStatus
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Instant
 
@@ -72,8 +75,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val assistantState: StateFlow<AssistantUiState> = _assistantState.asStateFlow()
     private var assistantJob: Job? = null
 
+    // Coarse 15s pulse for dashboard overdue/today date bucket calculations; UI live seconds read `nowMillis` directly.
+    private val coarseRefreshPulse: Flow<Long> = flow {
+        while (currentCoroutineContext().isActive) {
+            emit(container.networkTimeProvider.currentEpochMillis())
+            delay(15_000L)
+        }
+    }
+
     val homeState: StateFlow<HomeUiState> = combine(
-        container.sharedNowMillis,
+        coarseRefreshPulse,
         preferences,
         container.reminderRepository.reminders,
         container.alarmRepository.alarms,
@@ -85,7 +96,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.database.notificationLogDao().observeUnreadCount(),
         container.systemHealthChecker.report,
     ) { values ->
-        val now = values[0] as Long
+        val now = container.sharedNowMillis.value
         val prefs = values[1] as UserPreferences
         @Suppress("UNCHECKED_CAST")
         val reminders = values[2] as List<ReminderEntity>
@@ -175,7 +186,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             todayTotalCount = todayTotal,
             todayProgressFraction = progress,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeUiState())
 
     val notificationLogs: StateFlow<List<NotificationLogEntity>> =
         container.database.notificationLogDao().observeLogs()

@@ -55,8 +55,24 @@ fun TimerTabContent(
     var showCreateDialog by remember { mutableStateOf(false) }
     var selectedDurationMs by remember { mutableLongStateOf(15 * 60_000L) }
     var selectedPresetLabel by remember { mutableStateOf("15 min") }
+    var selectedTimerId by remember { mutableStateOf<Long?>(null) }
+    var previewPresetMode by remember { mutableStateOf(false) }
 
-    val primaryTimer = timers.firstOrNull { it.isRunning } ?: timers.firstOrNull()
+    val latestRunningId = timers.filter { it.isRunning }.maxOfOrNull { it.id }
+    LaunchedEffect(latestRunningId) {
+        if (latestRunningId != null) {
+            selectedTimerId = latestRunningId
+            previewPresetMode = false
+        }
+    }
+
+    val primaryTimer = if (previewPresetMode) {
+        null
+    } else {
+        timers.firstOrNull { it.id == selectedTimerId }
+            ?: timers.firstOrNull { it.isRunning }
+            ?: timers.firstOrNull()
+    }
     val heroRemainingMs = if (primaryTimer != null) {
         if (primaryTimer.isRunning && primaryTimer.endEpochMillis != null) {
             (primaryTimer.endEpochMillis - tickNowMillis).coerceAtLeast(0L)
@@ -162,6 +178,7 @@ fun TimerTabContent(
                                     .clickable {
                                         selectedDurationMs = ms
                                         selectedPresetLabel = lbl
+                                        previewPresetMode = true
                                     },
                             ) {
                                 Text(
@@ -197,6 +214,12 @@ fun TimerTabContent(
 
                     // Primary Start / Pause CTA button (Screen 9 purple-to-blue pill)
                     if (primaryTimer != null) {
+                        val actionLabel = when {
+                            primaryTimer.isRunning -> "Pause"
+                            primaryTimer.remainingMillis == 0L -> "Restart"
+                            primaryTimer.remainingMillis < primaryTimer.durationMillis -> "Resume"
+                            else -> "Start"
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -204,14 +227,16 @@ fun TimerTabContent(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             RRGradientButton(
-                                text = if (primaryTimer.isRunning) "Pause" else "Resume",
+                                text = actionLabel,
                                 leadingIcon = if (primaryTimer.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 colors = listOf(Color(0xFF7C3AED), Color(0xFF2563EB)),
                                 onClick = {
                                     if (primaryTimer.isRunning) onPauseTimer(primaryTimer)
                                     else onResumeTimer(primaryTimer)
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("timer_hero_toggle_btn"),
                             )
                             Surface(
                                 shape = CircleShape,
@@ -220,7 +245,8 @@ fun TimerTabContent(
                                 modifier = Modifier
                                     .size(52.dp)
                                     .clip(CircleShape)
-                                    .clickable { onResetTimer(primaryTimer) },
+                                    .clickable { onResetTimer(primaryTimer) }
+                                    .testTag("timer_hero_reset_btn"),
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(Icons.Rounded.Replay, contentDescription = "Reset Timer", tint = Color.White)
@@ -229,10 +255,13 @@ fun TimerTabContent(
                         }
                     } else {
                         RRGradientButton(
-                            text = "Start",
+                            text = "Start $selectedPresetLabel",
                             leadingIcon = Icons.Rounded.PlayArrow,
                             colors = listOf(Color(0xFF7C3AED), Color(0xFF2563EB)),
-                            onClick = { onCreateTimer(selectedPresetLabel, selectedDurationMs, false) },
+                            onClick = {
+                                previewPresetMode = false
+                                onCreateTimer(selectedPresetLabel, selectedDurationMs, false)
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 24.dp)
@@ -302,7 +331,19 @@ fun TimerTabContent(
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = Color(0xCC0D1A38),
-                        border = BorderStroke(1.dp, if (timer.isRunning) Color(0x6638BDF8) else Color(0x3360A5FA)),
+                        border = BorderStroke(
+                            1.dp,
+                            if (timer.id == primaryTimer?.id) Color(0xAA38BDF8)
+                            else if (timer.isRunning) Color(0x6638BDF8)
+                            else Color(0x3360A5FA),
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable {
+                                selectedTimerId = timer.id
+                                previewPresetMode = false
+                            },
                     ) {
                         Row(
                             modifier = Modifier

@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     val preferences: StateFlow<UserPreferences> = container.effectivePreferences
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UserPreferences())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, UserPreferences())
 
     val remoteConfig: StateFlow<GlobalAppConfig?> = container.remoteGlobalConfig
 
@@ -146,7 +146,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setDefaultReminderLead(minutes: Int) {
         viewModelScope.launch {
             container.preferencesRepository.setDefaultReminderLead(minutes)
-            container.reminderRepository.rescheduleAllReminders(minutes)
+            runCatching { container.reminderRepository.rescheduleAllReminders(minutes) }
         }
     }
 
@@ -165,7 +165,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setLocationRemindersEnabled(enabled: Boolean) {
         viewModelScope.launch {
             container.preferencesRepository.setLocationRemindersEnabled(enabled)
-            container.locationHelper.scheduleBatteryConsciousLocationCheck(enabled)
+            runCatching { container.locationHelper.scheduleBatteryConsciousLocationCheck(enabled) }
         }
     }
 

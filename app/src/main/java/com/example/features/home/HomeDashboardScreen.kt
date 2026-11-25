@@ -56,6 +56,7 @@ import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.TabularClockLarge
 import com.example.ui.theme.TabularClockMedium
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -65,6 +66,7 @@ import java.util.Locale
 @Composable
 fun HomeDashboardScreen(
     homeState: HomeUiState,
+    liveNowMillis: Long = homeState.nowMillis,
     preferences: UserPreferences,
     globalConfig: GlobalAppConfig? = null,
     timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
@@ -91,6 +93,9 @@ fun HomeDashboardScreen(
     onQuickCompleteReminder: (ReminderEntity) -> Unit,
     onQuickToggleTask: (TaskEntity) -> Unit,
     onToggleAlarm: (AlarmEntity, Boolean) -> Unit = { _, _ -> },
+    onPauseTimer: (TimerEntity) -> Unit = {},
+    onResumeTimer: (TimerEntity) -> Unit = {},
+    onResetTimer: (TimerEntity) -> Unit = {},
     onQuickSaveReminder: (ReminderEntity) -> Unit,
     onQuickSaveTask: (TaskEntity) -> Unit,
     onMoveWidget: (Int, Int) -> Unit,
@@ -98,11 +103,13 @@ fun HomeDashboardScreen(
     onResetDashboard: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
     var showCustomizeSheet by remember { mutableStateOf(false) }
     var showMoreToolsSheet by remember { mutableStateOf(false) }
     var showQuickAddDialog by remember { mutableStateOf(false) }
     var quickAddInitialTitle by remember { mutableStateOf("") }
-    var quickAddInitialMillis by remember { mutableLongStateOf(homeState.nowMillis + 3_600_000L) }
+    var quickAddInitialMillis by remember { mutableLongStateOf(liveNowMillis + 3_600_000L) }
     var voiceAmbiguityNote by remember { mutableStateOf<String?>(null) }
 
     val voiceLauncher = rememberLauncherForActivityResult(
@@ -125,8 +132,8 @@ fun HomeDashboardScreen(
     val primaryZone = remember(preferences.primaryClockZone) {
         preferences.primaryClockZone.toZoneId()
     }
-    val zdt = remember(homeState.nowMillis, primaryZone) {
-        Instant.ofEpochMilli(homeState.nowMillis).atZone(primaryZone)
+    val zdt = remember(liveNowMillis, primaryZone) {
+        Instant.ofEpochMilli(liveNowMillis).atZone(primaryZone)
     }
     val greeting = when (zdt.hour) {
         in 5..11 -> "Good Morning!"
@@ -136,15 +143,15 @@ fun HomeDashboardScreen(
     }
     val isDaytime = zdt.hour in 6..18
 
-    val digitsStr = remember(homeState.nowMillis, primaryZone, preferences.use24Hour) {
+    val digitsStr = remember(liveNowMillis, primaryZone, preferences.use24Hour) {
         val pat = if (preferences.use24Hour) "HH:mm:ss" else "hh:mm:ss"
         zdt.format(DateTimeFormatter.ofPattern(pat, Locale.getDefault()))
     }
-    val amPmStr = remember(homeState.nowMillis, primaryZone, preferences.use24Hour) {
+    val amPmStr = remember(liveNowMillis, primaryZone, preferences.use24Hour) {
         if (preferences.use24Hour) "" else zdt.format(DateTimeFormatter.ofPattern("a", Locale.ENGLISH)).uppercase()
     }
     val dateStr = ScheduleCalculator.formatDate(
-        millis = homeState.nowMillis,
+        millis = liveNowMillis,
         pattern = "EEE, ${preferences.dateFormatStyle.pattern}",
         zoneId = primaryZone,
     )
@@ -155,6 +162,7 @@ fun HomeDashboardScreen(
 
     Scaffold(
         containerColor = Color.Transparent,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             Row(
                 modifier = Modifier
@@ -234,7 +242,7 @@ fun HomeDashboardScreen(
             FloatingActionButton(
                 onClick = {
                     quickAddInitialTitle = ""
-                    quickAddInitialMillis = homeState.nowMillis + 3_600_000L
+                    quickAddInitialMillis = liveNowMillis + 3_600_000L
                     voiceAmbiguityNote = null
                     showQuickAddDialog = true
                 },
@@ -389,7 +397,12 @@ fun HomeDashboardScreen(
                             border = BorderStroke(1.dp, extra.cardBorder),
                             modifier = Modifier
                                 .clip(CircleShape)
-                                .clickable(onClick = onSyncNetworkTime)
+                                .clickable {
+                                    onSyncNetworkTime()
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar("Syncing live clock time...")
+                                    }
+                                }
                                 .testTag("home_sync_time_pill"),
                         ) {
                             Row(
@@ -650,8 +663,28 @@ fun HomeDashboardScreen(
                                     )
                                 }
                                 IconButton(
-                                    onClick = { onQuickCompleteReminder(nextReminder) },
-                                    modifier = Modifier.size(36.dp),
+                                    onClick = {
+                                        onQuickCompleteReminder(nextReminder)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Completed \"${nextReminder.title}\"")
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("home_next_reminder_complete_btn"),
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.CheckCircleOutline,
+                                        contentDescription = "Mark reminder complete",
+                                        tint = Color(0xFF10B981),
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                IconButton(
+                                    onClick = onNavigateReminders,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("home_next_reminder_open_btn"),
                                 ) {
                                     Icon(
                                         Icons.AutoMirrored.Rounded.ArrowForward,
@@ -731,7 +764,7 @@ fun HomeDashboardScreen(
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
                                     val sub = if (alarm.isEnabled && alarm.nextTriggerAtMillis != null) {
-                                        "${alarm.label} • ${ScheduleCalculator.formatCountdownDelta(alarm.nextTriggerAtMillis, homeState.nowMillis)}"
+                                        "${alarm.label} • ${ScheduleCalculator.formatCountdownDelta(alarm.nextTriggerAtMillis, liveNowMillis)}"
                                     } else {
                                         "${alarm.label} • Off"
                                     }
@@ -767,7 +800,7 @@ fun HomeDashboardScreen(
                 }
             }
 
-            // Quick Access 4-tile grid matching Screen 2 (Reminders, Alarms, Weather, More)
+            // Quick Access 8-tile grid exposing all core tools directly on Home
             item(key = "hero_quick_access") {
                 Column(
                     modifier = Modifier
@@ -801,6 +834,43 @@ fun HomeDashboardScreen(
                             modifier = Modifier.weight(1f),
                         )
                         QuickAccessSquareTile(
+                            label = "Timer",
+                            icon = Icons.Rounded.HourglassBottom,
+                            iconBgColors = listOf(Color(0xFF7C3AED), Color(0xFF6366F1)),
+                            onClick = onNavigateTimer,
+                            testTag = "qa_timer",
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuickAccessSquareTile(
+                            label = "Stopwatch",
+                            icon = Icons.Rounded.Timer,
+                            iconBgColors = listOf(Color(0xFF0891B2), Color(0xFF22D3EE)),
+                            onClick = onNavigateStopwatch,
+                            testTag = "qa_stopwatch",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        QuickAccessSquareTile(
+                            label = "Live Clock",
+                            icon = Icons.Rounded.AccessTimeFilled,
+                            iconBgColors = listOf(Color(0xFF1D4ED8), Color(0xFF60A5FA)),
+                            onClick = onOpenLiveClock,
+                            testTag = "qa_live_clock",
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuickAccessSquareTile(
+                            label = "World Clock",
+                            icon = Icons.Rounded.Public,
+                            iconBgColors = listOf(Color(0xFF0D9488), Color(0xFF34D399)),
+                            onClick = onNavigateWorldClock,
+                            testTag = "qa_world_clock",
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuickAccessSquareTile(
                             label = "Weather",
                             icon = Icons.Rounded.WbSunny,
                             iconBgColors = listOf(Color(0xFF0284C7), Color(0xFF38BDF8)),
@@ -828,8 +898,11 @@ fun HomeDashboardScreen(
                             item(key = "widget_active_timers") {
                                 ActiveTimersDashboardCard(
                                     timers = homeState.activeTimers,
-                                    nowMillis = homeState.nowMillis,
+                                    nowMillis = liveNowMillis,
                                     onClick = onNavigateTimer,
+                                    onPauseTimer = onPauseTimer,
+                                    onResumeTimer = onResumeTimer,
+                                    onResetTimer = onResetTimer,
                                 )
                             }
                         }
@@ -840,7 +913,7 @@ fun HomeDashboardScreen(
                             item(key = "widget_world_clock") {
                                 WorldClockPreviewCard(
                                     cities = homeState.worldClockCities,
-                                    nowMillis = homeState.nowMillis,
+                                    nowMillis = liveNowMillis,
                                     preferences = preferences,
                                     onClick = onNavigateWorldClock,
                                 )
@@ -1010,7 +1083,7 @@ fun HomeDashboardScreen(
         QuickAddDialog(
             initialTitle = quickAddInitialTitle,
             initialMillis = quickAddInitialMillis,
-            nowMillis = homeState.nowMillis,
+            nowMillis = liveNowMillis,
             ambiguityNote = voiceAmbiguityNote,
             preferences = preferences,
             onDismiss = { showQuickAddDialog = false },
@@ -1024,9 +1097,12 @@ fun HomeDashboardScreen(
                     ),
                 )
                 showQuickAddDialog = false
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Reminder \"$title\" saved")
+                }
             },
             onSaveTask = { title, priority ->
-                val tomorrowDue = Instant.ofEpochMilli(homeState.nowMillis)
+                val tomorrowDue = Instant.ofEpochMilli(liveNowMillis)
                     .atZone(primaryZone)
                     .toLocalDate()
                     .plusDays(1)
@@ -1042,6 +1118,9 @@ fun HomeDashboardScreen(
                     ),
                 )
                 showQuickAddDialog = false
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Task \"$title\" saved")
+                }
             },
         )
     }
@@ -1176,6 +1255,9 @@ private fun ActiveTimersDashboardCard(
     timers: List<TimerEntity>,
     nowMillis: Long,
     onClick: () -> Unit,
+    onPauseTimer: (TimerEntity) -> Unit = {},
+    onResumeTimer: (TimerEntity) -> Unit = {},
+    onResetTimer: (TimerEntity) -> Unit = {},
 ) {
     val extra = LocalRRExtraColors.current
     RRCard(
@@ -1219,10 +1301,39 @@ private fun ActiveTimersDashboardCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                RRStatusPill(
-                    text = ScheduleCalculator.formatDurationMillis(remaining),
-                    color = if (timer.isRunning) extra.accentPrimary else extra.warning,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    RRStatusPill(
+                        text = ScheduleCalculator.formatDurationMillis(remaining),
+                        color = if (timer.isRunning) extra.accentPrimary else extra.warning,
+                    )
+                    IconButton(
+                        onClick = {
+                            if (timer.isRunning) onPauseTimer(timer) else onResumeTimer(timer)
+                        },
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (timer.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (timer.isRunning) "Pause timer" else "Resume timer",
+                            tint = extra.accentPrimary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onResetTimer(timer) },
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Replay,
+                            contentDescription = "Reset timer",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
             }
         }
     }

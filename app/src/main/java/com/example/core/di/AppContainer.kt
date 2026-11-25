@@ -1,11 +1,14 @@
 package com.example.core.di
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.core.ai.AiAssistantRepository
 import com.example.core.calendar.DeviceCalendarReader
 import com.example.core.database.BackupManager
 import com.example.core.database.RRDatabase
+import com.example.core.database.TimerEntity
 import com.example.core.datastore.UserPreferences
 import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.firebase.GlobalAppConfig
@@ -15,27 +18,26 @@ import com.example.core.location.LocationHelper
 import com.example.core.network.NetworkModule
 import com.example.core.network.NetworkTimeProvider
 import com.example.core.network.OwnerTimeOverride
+import com.example.core.notifications.AlarmForegroundService
+import com.example.core.notifications.RRChannels
 import com.example.core.notifications.RRNotificationManager
 import com.example.core.notifications.ReminderAlarmScheduler
 import com.example.data.*
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.merge
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
     private val containerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -56,31 +58,74 @@ class AppContainer(context: Context) {
     val aiAssistantRepository: AiAssistantRepository by lazy { AiAssistantRepository() }
     val networkTimeProvider: NetworkTimeProvider by lazy { NetworkTimeProvider(NetworkModule.httpClient) }
 
-    private val clockRefreshSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 2)
+    private val _sharedNowMillis = MutableStateFlow(networkTimeProvider.currentEpochMillis())
+    val sharedNowMillis: StateFlow<Long> = _sharedNowMillis.asStateFlow()
 
-    val sharedNowMillis: StateFlow<Long> = merge(
-        flow {
-            while (currentCoroutineContext().isActive) {
+    init {
+        // Continuous, non-blocking top-of-second live clock engine across all screens
+        containerScope.launch {
+            while (isActive) {
                 val now = networkTimeProvider.currentEpochMillis()
-                emit(now)
+                _sharedNowMillis.value = now
                 val remainder = ((now % 1000L) + 1000L) % 1000L
                 val sleepMs = (1000L - remainder).let { if (it < 40L) it + 1000L else it }
                 delay(sleepMs)
             }
-        },
-        flow {
-            clockRefreshSignal.collect {
-                emit(networkTimeProvider.currentEpochMillis())
+        }
+
+        // In-app running timer expiration watcher (zero idle cost when no timers are active)
+        containerScope.launch {
+            timerRepository.timers.collectLatest { list ->
+                val running = list.filter { it.isRunning && it.endEpochMillis != null }
+                if (running.isEmpty()) return@collectLatest
+                while (isActive) {
+                    val now = System.currentTimeMillis()
+                    val expired = running.filter { (it.endEpochMillis ?: Long.MAX_VALUE) <= now }
+                    if (expired.isNotEmpty()) {
+                        expired.forEach { t ->
+                            val finalized = timerRepository.finalizeExpiredTimer(
+                                timerId = t.id,
+                                nowMillis = now,
+                                fromReceiver = false,
+                            )
+                            if (finalized != null) {
+                                triggerTimerCompletionAlert(finalized)
+                            }
+                        }
+                        break
+                    }
+                    delay(250L)
+                }
             }
-        },
-    ).stateIn(
-        scope = containerScope,
-        started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 2_000L),
-        initialValue = networkTimeProvider.currentEpochMillis(),
-    )
+        }
+    }
+
+    private suspend fun triggerTimerCompletionAlert(timer: TimerEntity) {
+        val vibrate = runCatching { preferencesRepository.getSnapshot().vibrationEnabled }.getOrDefault(true)
+        val serviceIntent = Intent(appContext, AlarmForegroundService::class.java).apply {
+            action = AlarmForegroundService.ACTION_START
+            putExtra(AlarmForegroundService.EXTRA_ID, timer.id)
+            putExtra(AlarmForegroundService.EXTRA_LABEL, timer.label)
+            putExtra(AlarmForegroundService.EXTRA_IS_TIMER, true)
+            putExtra(AlarmForegroundService.EXTRA_VIBRATE, vibrate)
+            putExtra(AlarmForegroundService.EXTRA_GRADUAL_VOLUME, false)
+        }
+        runCatching {
+            ContextCompat.startForegroundService(appContext, serviceIntent)
+        }.onFailure {
+            notificationManager.postSimpleNotification(
+                id = AlarmForegroundService.FOREGROUND_NOTIFICATION_ID,
+                channelId = RRChannels.TIMERS,
+                title = "Timer Finished: ${timer.label}",
+                body = "Countdown completed",
+                sourceType = "TIMER",
+                sourceId = timer.id,
+            )
+        }
+    }
 
     fun emitClockTick() {
-        clockRefreshSignal.tryEmit(Unit)
+        _sharedNowMillis.value = networkTimeProvider.currentEpochMillis()
     }
 
     suspend fun syncClockAndEmit() {

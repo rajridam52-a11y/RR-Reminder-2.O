@@ -494,4 +494,71 @@ class RRReminderUnitTests {
         assertEquals(base.syncFingerprint(), same.syncFingerprint())
         assertFalse(base.syncFingerprint() == updated.syncFingerprint())
     }
+
+    @Test
+    fun `network time provider advances continuously with monotonic elapsed deltas`() {
+        var elapsedMs = 5_000L
+        var systemNowMs = 1_800_000_000_000L
+        val provider = NetworkTimeProvider(
+            okHttpClient = NetworkModule.httpClient,
+            elapsedMsProvider = { elapsedMs },
+            systemNowMsProvider = { systemNowMs },
+        )
+
+        val t0 = provider.currentEpochMillis()
+        systemNowMs += 1_000L
+        val t1 = provider.currentEpochMillis()
+        assertEquals(1_000L, t1 - t0)
+
+        // Simulate monotonic FIXED anchor progression across 3 seconds
+        provider.setOwnerTimeOverride(
+            OwnerTimeOverride(
+                enabled = true,
+                mode = "FIXED",
+                fixedTargetEpochMillis = 1_900_000_000_000L,
+                fixedAnchorEpochMillis = t1,
+            ),
+        )
+        systemNowMs += 3_000L
+        elapsedMs += 3_000L
+        assertEquals(1_900_000_003_000L, provider.currentEpochMillis())
+    }
+
+    @Test
+    fun `stopwatch and timer duration formatting handle zero, negative, sub-second, and multi-hour edge cases`() {
+        assertEquals("00:00.00", ScheduleCalculator.formatStopwatchMillis(0L))
+        assertEquals("00:00.00", ScheduleCalculator.formatStopwatchMillis(-250L))
+        assertEquals("00:00.99", ScheduleCalculator.formatStopwatchMillis(995L))
+        assertEquals("01:02:03.45", ScheduleCalculator.formatStopwatchMillis(3_723_456L))
+
+        assertEquals("00:00", ScheduleCalculator.formatDurationMillis(0L))
+        assertEquals("00:00", ScheduleCalculator.formatDurationMillis(-1_000L))
+        assertEquals("00:59", ScheduleCalculator.formatDurationMillis(59_999L))
+        assertEquals("02:05:09", ScheduleCalculator.formatDurationMillis(7_509_000L))
+    }
+
+    @Test
+    fun `alarm next trigger computes same-day upcoming, rollover, and weekday labels accurately`() {
+        val zone = ZoneId.of("UTC")
+        // 2026-11-23 is Monday 08:00 UTC
+        val mon8am = ZonedDateTime.of(2026, 11, 23, 8, 0, 0, 0, zone).toInstant().toEpochMilli()
+
+        // Same day upcoming 09:15 Mon
+        val sameDayMs = ScheduleCalculator.computeNextAlarmTrigger(9, 15, repeatDaysMask = 0, nowMillis = mon8am, zoneId = zone)
+        val sameDayZdt = Instant.ofEpochMilli(sameDayMs).atZone(zone)
+        assertEquals(23, sameDayZdt.dayOfMonth)
+        assertEquals(9, sameDayZdt.hour)
+        assertEquals(15, sameDayZdt.minute)
+
+        // Weekend mask (Sat=bit 5, Sun=bit 6 => 0b1100000) jumps from Mon Nov 23 to Sat Nov 28
+        val weekendMs = ScheduleCalculator.computeNextAlarmTrigger(7, 0, repeatDaysMask = 0b1100000, nowMillis = mon8am, zoneId = zone)
+        val weekendZdt = Instant.ofEpochMilli(weekendMs).atZone(zone)
+        assertEquals(28, weekendZdt.dayOfMonth)
+
+        assertEquals("Once", ScheduleCalculator.formatWeekdaysMask(0))
+        assertEquals("Every day", ScheduleCalculator.formatWeekdaysMask(0b1111111))
+        assertEquals("Weekdays", ScheduleCalculator.formatWeekdaysMask(0b0011111))
+        assertEquals("Weekends", ScheduleCalculator.formatWeekdaysMask(0b1100000))
+        assertEquals("Mon, Wed", ScheduleCalculator.formatWeekdaysMask((1 shl 0) or (1 shl 2)))
+    }
 }

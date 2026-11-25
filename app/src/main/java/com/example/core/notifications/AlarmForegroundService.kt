@@ -58,7 +58,20 @@ class AlarmForegroundService : Service() {
             snoozeMinutes = snoozeMinutes,
         )
 
-        startForeground(FOREGROUND_NOTIFICATION_ID, notification)
+        runCatching { startForeground(FOREGROUND_NOTIFICATION_ID, notification) }
+            .onFailure {
+                // If foreground promotion fails on restricted OEM states, post alert and stop safely.
+                notifManager.postSimpleNotification(
+                    id = FOREGROUND_NOTIFICATION_ID,
+                    channelId = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS,
+                    title = if (isTimer) "Timer Finished: $label" else "Alarm: $label",
+                    body = if (isTimer) "Countdown completed" else "Alarm triggered",
+                    sourceType = if (isTimer) "TIMER" else "ALARM",
+                    sourceId = id,
+                )
+                stopSelf()
+                return START_NOT_STICKY
+            }
         notifManager.logNotification(
             channelId = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS,
             title = if (isTimer) "Timer Finished: $label" else "Alarm: $label",
@@ -124,20 +137,22 @@ class AlarmForegroundService : Service() {
     }
 
     private fun startVibration() {
-        val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vm.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
-        vibrator = vib
-        val pattern = longArrayOf(0, 600, 400, 600, 400)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vib.vibrate(VibrationEffect.createWaveform(pattern, 0))
-        } else {
-            @Suppress("DEPRECATION")
-            vib.vibrate(pattern, 0)
+        runCatching {
+            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vm?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            } ?: return
+            vibrator = vib
+            val pattern = longArrayOf(0, 600, 400, 600, 400)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vib.vibrate(VibrationEffect.createWaveform(pattern, 0))
+            } else {
+                @Suppress("DEPRECATION")
+                vib.vibrate(pattern, 0)
+            }
         }
     }
 
@@ -176,11 +191,9 @@ class AlarmForegroundService : Service() {
         const val EXTRA_SNOOZE_MINUTES = "extra_snooze_min"
 
         fun stop(context: Context) {
-            context.startService(
-                Intent(context, AlarmForegroundService::class.java).apply {
-                    action = ACTION_STOP
-                },
-            )
+            runCatching {
+                context.stopService(Intent(context, AlarmForegroundService::class.java))
+            }
         }
     }
 }

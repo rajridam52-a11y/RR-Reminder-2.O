@@ -30,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.core.database.AlarmEntity
 import com.example.core.database.AlarmHistoryEntity
 import com.example.core.datastore.UserPreferences
@@ -430,12 +432,18 @@ private fun AlarmEditorDialog(
     onSave: (AlarmEntity) -> Unit,
 ) {
     val context = LocalContext.current
+    val nowCal = remember {
+        java.util.Calendar.getInstance().apply {
+            if (initial == null) add(java.util.Calendar.MINUTE, 5)
+        }
+    }
     val timeState = rememberTimePickerState(
-        initialHour = initial?.hour ?: 7,
-        initialMinute = initial?.minute ?: 0,
+        initialHour = initial?.hour ?: nowCal.get(java.util.Calendar.HOUR_OF_DAY),
+        initialMinute = initial?.minute ?: nowCal.get(java.util.Calendar.MINUTE),
         is24Hour = preferences.use24Hour,
     )
-    var label by remember { mutableStateOf(initial?.label ?: "Morning Alarm") }
+    var useKeyboardInput by remember { mutableStateOf(false) }
+    var label by remember { mutableStateOf(initial?.label ?: "Alarm") }
     var repeatMask by remember { mutableIntStateOf(initial?.repeatDaysMask ?: 0) }
     var vibrate by remember { mutableStateOf(initial?.vibrate ?: preferences.vibrationEnabled) }
     var gradualVolume by remember { mutableStateOf(initial?.gradualVolume ?: true) }
@@ -462,114 +470,183 @@ private fun AlarmEditorDialog(
         }
     }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "New Alarm" else "Edit Alarm") },
-        text = {
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .widthIn(max = 520.dp),
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 480.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                TimePicker(state = timeState)
-                OutlinedTextField(
-                    value = label,
-                    onValueChange = { label = it },
-                    label = { Text("Alarm Label") },
-                    singleLine = true,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (initial == null) "New Alarm" else "Edit Alarm",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    )
+                    IconButton(onClick = { useKeyboardInput = !useKeyboardInput }) {
+                        Icon(
+                            imageVector = if (useKeyboardInput) Icons.Rounded.AccessTime else Icons.Rounded.Keyboard,
+                            contentDescription = if (useKeyboardInput) "Switch to clock dial" else "Switch to keyboard input",
+                        )
+                    }
+                }
+
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("alarm_label_input"),
-                )
-                Text("Repeat Weekdays", style = MaterialTheme.typography.labelMedium)
-                val dayLabels = listOf("M", "T", "W", "T", "F", "S", "S")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .heightIn(max = 460.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    dayLabels.forEachIndexed { idx, txt ->
-                        val active = (repeatMask and (1 shl idx)) != 0
-                        FilterChip(
-                            selected = active,
-                            onClick = { repeatMask = repeatMask xor (1 shl idx) },
-                            label = { Text(txt) },
-                        )
+                    if (useKeyboardInput) {
+                        TimeInput(state = timeState)
+                    } else {
+                        TimePicker(state = timeState)
                     }
-                }
-                OutlinedButton(
-                    onClick = {
-                        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-                            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
-                            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Alarm Sound")
-                            putExtra(
-                                RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                                ringtoneUri?.let { Uri.parse(it) },
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = { label = it },
+                        label = { Text("Alarm Label") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("alarm_label_input"),
+                    )
+                    Text(
+                        text = "Repeat Weekdays",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    val dayLabels = listOf("M", "T", "W", "T", "F", "S", "S")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        dayLabels.forEachIndexed { idx, txt ->
+                            val active = (repeatMask and (1 shl idx)) != 0
+                            Surface(
+                                shape = CircleShape,
+                                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                ),
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .clickable { repeatMask = repeatMask xor (1 shl idx) },
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = txt,
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                        color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Alarm Sound")
+                                putExtra(
+                                    RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                                    ringtoneUri?.let { Uri.parse(it) },
+                                )
+                            }
+                            runCatching { ringtoneLauncher.launch(intent) }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Rounded.MusicNote, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Sound: $ringtoneTitle")
+                    }
+
+                    Text(
+                        text = "Snooze Duration",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        listOf(5, 10, 15, 20).forEach { mins ->
+                            FilterChip(
+                                selected = snoozeMinutes == mins,
+                                onClick = { snoozeMinutes = mins },
+                                label = { Text("${mins}m") },
                             )
                         }
-                        runCatching { ringtoneLauncher.launch(intent) }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Rounded.MusicNote, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Sound: $ringtoneTitle")
-                }
+                    }
 
-                Text("Snooze Duration", style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(5, 10, 15, 20).forEach { mins ->
-                        FilterChip(
-                            selected = snoozeMinutes == mins,
-                            onClick = { snoozeMinutes = mins },
-                            label = { Text("${mins}m") },
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Vibrate")
+                        Switch(checked = vibrate, onCheckedChange = { vibrate = it })
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Gradual Volume Fade-In")
+                        Switch(checked = gradualVolume, onCheckedChange = { gradualVolume = it })
                     }
                 }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Vibrate")
-                    Switch(checked = vibrate, onCheckedChange = { vibrate = it })
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Gradual Volume Fade-In")
-                    Switch(checked = gradualVolume, onCheckedChange = { gradualVolume = it })
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val saved = (initial ?: AlarmEntity(hour = timeState.hour, minute = timeState.minute)).copy(
+                                label = label.trim().ifBlank { "Alarm" },
+                                hour = timeState.hour,
+                                minute = timeState.minute,
+                                isEnabled = true,
+                                repeatDaysMask = repeatMask,
+                                ringtoneUri = ringtoneUri,
+                                ringtoneTitle = ringtoneTitle,
+                                vibrate = vibrate,
+                                snoozeMinutes = snoozeMinutes,
+                                gradualVolume = gradualVolume,
+                            )
+                            onSave(saved)
+                        },
+                        modifier = Modifier.testTag("alarm_save_btn"),
+                    ) {
+                        Text("Save")
+                    }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val saved = (initial ?: AlarmEntity(hour = timeState.hour, minute = timeState.minute)).copy(
-                        label = label.trim().ifBlank { "Alarm" },
-                        hour = timeState.hour,
-                        minute = timeState.minute,
-                        isEnabled = true,
-                        repeatDaysMask = repeatMask,
-                        ringtoneUri = ringtoneUri,
-                        ringtoneTitle = ringtoneTitle,
-                        vibrate = vibrate,
-                        snoozeMinutes = snoozeMinutes,
-                        gradualVolume = gradualVolume,
-                    )
-                    onSave(saved)
-                },
-                modifier = Modifier.testTag("alarm_save_btn"),
-            ) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
+        }
+    }
 }

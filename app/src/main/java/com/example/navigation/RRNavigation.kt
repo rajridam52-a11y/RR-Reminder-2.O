@@ -234,13 +234,14 @@ private fun RRMainShell(
     val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
     val remoteConfig by mainViewModel.remoteConfig.collectAsStateWithLifecycle()
     val homeState by mainViewModel.homeState.collectAsStateWithLifecycle()
+    val liveNowMillis by mainViewModel.nowMillis.collectAsStateWithLifecycle()
     val timeSyncStatus by mainViewModel.timeSyncStatus.collectAsStateWithLifecycle()
     val isOwnerAccount = isOwnerUser(currentUser.email, currentUser.isEmailVerified)
 
     // 0=Live Clock, 1=Alarms, 2=World Clock, 3=Timer, 4=Stopwatch
-    var clockSubTab by remember { mutableIntStateOf(0) }
+    var clockSubTab by rememberSaveable { mutableIntStateOf(0) }
     // 0=Calendar, 1=Tasks, 2=Notes, 3=Habits, 4=Focus & Routines
-    var workspaceSubTab by remember { mutableIntStateOf(0) }
+    var workspaceSubTab by rememberSaveable { mutableIntStateOf(0) }
     var showDrawerAboutDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(initialDestination) {
@@ -370,6 +371,7 @@ private fun RRMainShell(
                             composable(RRRoutes.HOME) {
                                 HomeDashboardScreen(
                                     homeState = homeState,
+                                    liveNowMillis = liveNowMillis,
                                     preferences = preferences,
                                     globalConfig = remoteConfig,
                                     timeSyncStatus = timeSyncStatus,
@@ -426,6 +428,9 @@ private fun RRMainShell(
                                     onQuickCompleteReminder = mainViewModel::quickCompleteReminder,
                                     onQuickToggleTask = mainViewModel::quickToggleTask,
                                     onToggleAlarm = mainViewModel::quickToggleAlarm,
+                                    onPauseTimer = timerSwVm::pauseTimer,
+                                    onResumeTimer = timerSwVm::resumeTimer,
+                                    onResetTimer = timerSwVm::resetTimer,
                                     onQuickSaveReminder = { rem: ReminderEntity ->
                                         scope.launch { container.reminderRepository.saveReminder(rem) }
                                     },
@@ -448,7 +453,7 @@ private fun RRMainShell(
 
                                 RemindersScreen(
                                     reminders = reminders,
-                                    nowMillis = homeState.nowMillis,
+                                    nowMillis = liveNowMillis,
                                     searchQuery = query,
                                     selectedFilter = filter,
                                     selectedCategory = cat,
@@ -662,7 +667,7 @@ private fun RRMainShell(
                                                 tasks = tasks,
                                                 rrEvents = calendarEvents,
                                                 deviceEvents = deviceEvents,
-                                                nowMillis = homeState.nowMillis,
+                                                nowMillis = liveNowMillis,
                                                 preferences = preferences,
                                                 onLoadDeviceCalendarMonth = prodVm::loadDeviceCalendarForMonth,
                                                 onSaveEvent = prodVm::saveCalendarEvent,
@@ -715,7 +720,7 @@ private fun RRMainShell(
                                 WeatherScreen(
                                     uiState = weatherUi,
                                     preferences = preferences,
-                                    nowMillis = homeState.nowMillis,
+                                    nowMillis = liveNowMillis,
                                     onSearchCity = weatherClockVm::searchWeatherCities,
                                     onSelectCity = weatherClockVm::fetchWeatherForCity,
                                     onClearCityResults = weatherClockVm::clearCityResults,

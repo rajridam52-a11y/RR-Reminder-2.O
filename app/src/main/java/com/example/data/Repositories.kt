@@ -8,6 +8,8 @@ import com.example.core.notifications.ReminderAlarmScheduler
 import com.example.widgets.WidgetUpdateHelper
 import com.squareup.moshi.Types
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ReminderRepository(
     private val context: Context,
@@ -26,10 +28,12 @@ class ReminderRepository(
         }
         val saved = reminder.copy(id = id)
         val leadMinutes = runCatching { prefsRepo.getSnapshot().defaultReminderLeadMinutes }.getOrDefault(0)
-        if (saved.isCompleted) {
-            scheduler.cancelReminder(id)
-        } else {
-            scheduler.scheduleReminder(saved, leadMinutes)
+        runCatching {
+            if (saved.isCompleted) {
+                scheduler.cancelReminder(id)
+            } else {
+                scheduler.scheduleReminder(saved, leadMinutes)
+            }
         }
         WidgetUpdateHelper.updateAllWidgets(context)
         return id
@@ -44,7 +48,9 @@ class ReminderRepository(
         }
         dao.update(updated)
         val leadMinutes = runCatching { prefsRepo.getSnapshot().defaultReminderLeadMinutes }.getOrDefault(0)
-        if (updated.isCompleted) scheduler.cancelReminder(updated.id) else scheduler.scheduleReminder(updated, leadMinutes)
+        runCatching {
+            if (updated.isCompleted) scheduler.cancelReminder(updated.id) else scheduler.scheduleReminder(updated, leadMinutes)
+        }
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
@@ -52,19 +58,19 @@ class ReminderRepository(
         val until = System.currentTimeMillis() + minutes * 60_000L
         val updated = reminder.copy(snoozedUntilMillis = until, isCompleted = false, updatedAtMillis = System.currentTimeMillis())
         dao.update(updated)
-        scheduler.scheduleReminder(updated)
+        runCatching { scheduler.scheduleReminder(updated) }
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
     suspend fun deleteReminder(id: Long) {
-        scheduler.cancelReminder(id)
+        runCatching { scheduler.cancelReminder(id) }
         dao.deleteById(id)
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
     suspend fun rescheduleAllReminders(leadMinutes: Int) {
         dao.getAllActiveSync().forEach { reminder ->
-            scheduler.scheduleReminder(reminder, leadMinutes)
+            runCatching { scheduler.scheduleReminder(reminder, leadMinutes) }
         }
     }
 }
@@ -85,9 +91,15 @@ class AlarmRepository(
             alarm.id
         }
         val withId = alarm.copy(id = id)
-        val next = if (withId.isEnabled) scheduler.scheduleAlarm(withId) else {
-            scheduler.cancelAlarm(id)
-            null
+        val next = runCatching {
+            if (withId.isEnabled) {
+                scheduler.scheduleAlarm(withId)
+            } else {
+                scheduler.cancelAlarm(id)
+                null
+            }
+        }.getOrElse {
+            if (withId.isEnabled) com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(withId) else null
         }
         dao.update(withId.copy(nextTriggerAtMillis = next))
         WidgetUpdateHelper.updateAllWidgets(context)
@@ -96,16 +108,22 @@ class AlarmRepository(
 
     suspend fun toggleAlarm(alarm: AlarmEntity, enabled: Boolean) {
         val updated = alarm.copy(isEnabled = enabled)
-        val next = if (enabled) scheduler.scheduleAlarm(updated) else {
-            scheduler.cancelAlarm(alarm.id)
-            null
+        val next = runCatching {
+            if (enabled) {
+                scheduler.scheduleAlarm(updated)
+            } else {
+                scheduler.cancelAlarm(alarm.id)
+                null
+            }
+        }.getOrElse {
+            if (enabled) com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(updated) else null
         }
         dao.update(updated.copy(nextTriggerAtMillis = next))
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
     suspend fun deleteAlarm(id: Long) {
-        scheduler.cancelAlarm(id)
+        runCatching { scheduler.cancelAlarm(id) }
         dao.deleteById(id)
         WidgetUpdateHelper.updateAllWidgets(context)
     }
@@ -224,6 +242,7 @@ class TimerRepository(
     private val dao: TimerDao,
     private val scheduler: ReminderAlarmScheduler,
 ) {
+    private val timerMutex = Mutex()
     val timers: Flow<List<TimerEntity>> = dao.observeTimers()
     val presets: Flow<List<TimerPresetEntity>> = dao.observePresets()
     val history: Flow<List<TimerHistoryEntity>> = dao.observeHistory()
@@ -239,18 +258,19 @@ class TimerRepository(
             isRepeat = repeat,
         )
         val id = dao.insertTimer(entity)
-        scheduler.scheduleTimer(entity.copy(id = id))
+        runCatching { scheduler.scheduleTimer(entity.copy(id = id)) }
         WidgetUpdateHelper.updateAllWidgets(context)
         return id
     }
 
-    suspend fun pauseTimer(timer: TimerEntity) {
-        if (!timer.isRunning) return
-        val remaining = ((timer.endEpochMillis ?: System.currentTimeMillis()) - System.currentTimeMillis())
+    suspend fun pauseTimer(timer: TimerEntity) = timerMutex.withLock {
+        val fresh = dao.getById(timer.id) ?: return@withLock
+        if (!fresh.isRunning) return@withLock
+        val remaining = ((fresh.endEpochMillis ?: System.currentTimeMillis()) - System.currentTimeMillis())
             .coerceAtLeast(0L)
-        scheduler.cancelTimer(timer.id)
+        runCatching { scheduler.cancelTimer(fresh.id) }
         dao.updateTimer(
-            timer.copy(
+            fresh.copy(
                 isRunning = false,
                 remainingMillis = remaining,
                 endEpochMillis = null,
@@ -259,33 +279,74 @@ class TimerRepository(
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
-    suspend fun resumeTimer(timer: TimerEntity) {
-        if (timer.isRunning) return
-        val rem = if (timer.remainingMillis > 0L) timer.remainingMillis else timer.durationMillis
-        val updated = timer.copy(
+    suspend fun resumeTimer(timer: TimerEntity) = timerMutex.withLock {
+        val fresh = dao.getById(timer.id) ?: return@withLock
+        if (fresh.isRunning) return@withLock
+        val rem = if (fresh.remainingMillis > 0L) fresh.remainingMillis else fresh.durationMillis
+        val updated = fresh.copy(
             isRunning = true,
             remainingMillis = rem,
             endEpochMillis = System.currentTimeMillis() + rem,
         )
         dao.updateTimer(updated)
-        scheduler.scheduleTimer(updated)
+        runCatching { scheduler.scheduleTimer(updated) }
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
-    suspend fun resetTimer(timer: TimerEntity) {
-        scheduler.cancelTimer(timer.id)
+    suspend fun resetTimer(timer: TimerEntity) = timerMutex.withLock {
+        runCatching { scheduler.cancelTimer(timer.id) }
+        val fresh = dao.getById(timer.id) ?: timer
         dao.updateTimer(
-            timer.copy(
+            fresh.copy(
                 isRunning = false,
-                remainingMillis = timer.durationMillis,
+                remainingMillis = fresh.durationMillis,
                 endEpochMillis = null,
             ),
         )
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
-    suspend fun deleteTimer(id: Long) {
-        scheduler.cancelTimer(id)
+    suspend fun finalizeExpiredTimer(
+        timerId: Long,
+        nowMillis: Long = System.currentTimeMillis(),
+        fromReceiver: Boolean = false,
+    ): TimerEntity? = timerMutex.withLock {
+        val timer = dao.getById(timerId) ?: return@withLock null
+        if (!timer.isRunning) return@withLock null
+        val end = timer.endEpochMillis ?: return@withLock null
+        val threshold = if (fromReceiver) end - 500L else end
+        if (nowMillis < threshold) return@withLock null
+
+        dao.insertHistory(
+            TimerHistoryEntity(
+                label = timer.label,
+                durationMillis = timer.durationMillis,
+            ),
+        )
+        if (timer.isRepeat) {
+            val restarted = timer.copy(
+                remainingMillis = timer.durationMillis,
+                endEpochMillis = nowMillis + timer.durationMillis,
+                isRunning = true,
+            )
+            dao.updateTimer(restarted)
+            runCatching { scheduler.scheduleTimer(restarted) }
+        } else {
+            dao.updateTimer(
+                timer.copy(
+                    remainingMillis = 0L,
+                    endEpochMillis = null,
+                    isRunning = false,
+                ),
+            )
+            runCatching { scheduler.cancelTimer(timer.id) }
+        }
+        WidgetUpdateHelper.updateAllWidgets(context)
+        timer
+    }
+
+    suspend fun deleteTimer(id: Long) = timerMutex.withLock {
+        runCatching { scheduler.cancelTimer(id) }
         dao.deleteTimerById(id)
         WidgetUpdateHelper.updateAllWidgets(context)
     }
@@ -415,7 +476,9 @@ class RoutineFocusRepository(
             )
         }
         val saved = routine.copy(id = id)
-        if (saved.reminderEnabled) scheduler.scheduleRoutine(saved) else scheduler.cancelRoutine(id)
+        runCatching {
+            if (saved.reminderEnabled) scheduler.scheduleRoutine(saved) else scheduler.cancelRoutine(id)
+        }
         return id
     }
 
@@ -427,7 +490,7 @@ class RoutineFocusRepository(
     }
 
     suspend fun deleteRoutine(id: Long) {
-        scheduler.cancelRoutine(id)
+        runCatching { scheduler.cancelRoutine(id) }
         routineDao.deleteRoutineById(id)
     }
 

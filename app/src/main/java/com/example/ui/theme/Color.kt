@@ -2,40 +2,40 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Aurora UI 2.0 Dark Mode — Deep Midnight Navy & Obsidian Void
-val NavyVoid = Color(0xFF040814)
-val NavyDeep = Color(0xFF081024)
-val NavySurface = Color(0xFF0D1730)
-val NavySurfaceElevated = Color(0xFF142244)
-val NavySurfaceHighest = Color(0xFF1B2E58)
-val NavyOutline = Color(0xFF284173)
-val DarkTextPrimary = Color(0xFFF3F8FF)
-val DarkTextSecondary = Color(0xFF9EB3D8)
+// RR Reminder 2.0 Dark Mode — Deep Cosmic Midnight Navy & Obsidian Void
+val NavyVoid = Color(0xFF050B18)
+val NavyDeep = Color(0xFF081226)
+val NavySurface = Color(0xFF0E1B36)
+val NavySurfaceElevated = Color(0xFF15264A)
+val NavySurfaceHighest = Color(0xFF1E3461)
+val NavyOutline = Color(0xFF2B497D)
+val DarkTextPrimary = Color(0xFFF5F9FF)
+val DarkTextSecondary = Color(0xFFA2B8DE)
 
-// Aurora UI 2.0 Light Mode — Clean Luminous Frost & Crisp Slate
-val LightBackground = Color(0xFFF3F7FB)
+// RR Reminder 2.0 Light Mode — Clean Luminous Sky Frost & Crisp White Cards
+val LightBackground = Color(0xFFEAF2FF)
 val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFE9F0F8)
-val LightSurfaceHighest = Color(0xFFDDE7F3)
-val LightOutline = Color(0xFFC5D5E8)
-val LightTextPrimary = Color(0xFF0A1429)
-val LightTextSecondary = Color(0xFF475A7D)
+val LightSurfaceVariant = Color(0xFFE1ECFC)
+val LightSurfaceHighest = Color(0xFFD2E2FA)
+val LightOutline = Color(0xFFC5D8F2)
+val LightTextPrimary = Color(0xFF0A1633)
+val LightTextSecondary = Color(0xFF4B6086)
 
-// Aurora Signature Accents
+// Signature Accents
 val AuroraEmerald = Color(0xFF10B981)
-val AuroraEmeraldBright = Color(0xFF34D399)
-val AuroraCyan = Color(0xFF06B6D4)
-val AuroraCyanBright = Color(0xFF22D3EE)
+val AuroraEmeraldBright = Color(0xFF22E59B)
+val AuroraCyan = Color(0xFF0EA5E9)
+val AuroraCyanBright = Color(0xFF38BDF8)
 
 // Semantic Status Colors
-val SemanticSuccessDark = Color(0xFF34D399)
+val SemanticSuccessDark = Color(0xFF22E59B)
 val SemanticSuccessLight = Color(0xFF059669)
 val SemanticWarningDark = Color(0xFFFBBF24)
 val SemanticWarningLight = Color(0xFFD97706)
 val SemanticErrorDark = Color(0xFFFB7185)
 val SemanticErrorLight = Color(0xFFE11D48)
-val SemanticInfoDark = Color(0xFF22D3EE)
-val SemanticInfoLight = Color(0xFF0284C7)
+val SemanticInfoDark = Color(0xFF38BDF8)
+val SemanticInfoLight = Color(0xFF2563EB)
 
 enum class AccentPreset(
     val key: String,
@@ -112,7 +112,7 @@ enum class ThemeMode(val key: String, val label: String) {
 }
 
 // Legacy compatibility constants if referenced
-val Purple80 = AuroraCyanBright
+val Purple80 = Color(0xFF22D3EE)
 val PurpleGrey80 = DarkTextSecondary
 val Pink80 = AuroraEmeraldBright
 val Purple40 = Color(0xFF0891B2)

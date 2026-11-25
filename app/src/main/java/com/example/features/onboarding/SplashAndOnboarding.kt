@@ -8,6 +8,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,13 +27,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -45,16 +49,74 @@ import com.example.core.permissions.PermissionHelper
 import com.example.ui.components.RRBackgroundContainer
 import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
+import com.example.ui.components.RRGradientButton
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.LocalRRExtraColors
-import com.example.ui.theme.NavyVoid
 import com.example.ui.theme.TabularClockMedium
 import com.example.ui.theme.ThemeMode
 
 @Composable
+private fun AuroraWelcomeWaveBackdrop(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF040917),
+                    Color(0xFF081430),
+                    Color(0xFF0A1D47),
+                    Color(0xFF050B1C),
+                ),
+            ),
+        )
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(Color(0x4438BDF8), Color.Transparent),
+                center = Offset(w * 0.5f, h * 0.30f),
+                radius = w * 0.72f,
+            ),
+        )
+        val magentaWave = Path().apply {
+            moveTo(0f, h * 0.74f)
+            cubicTo(w * 0.25f, h * 0.62f, w * 0.60f, h * 0.84f, w, h * 0.68f)
+            lineTo(w, h)
+            lineTo(0f, h)
+            close()
+        }
+        drawPath(
+            path = magentaWave,
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0x552563EB),
+                    Color(0x667C3AED),
+                    Color(0x55EC4899),
+                ),
+            ),
+        )
+        val cyanWave = Path().apply {
+            moveTo(0f, h * 0.78f)
+            cubicTo(w * 0.35f, h * 0.88f, w * 0.68f, h * 0.64f, w, h * 0.76f)
+            lineTo(w, h)
+            lineTo(0f, h)
+            close()
+        }
+        drawPath(
+            path = cyanWave,
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0x6606B6D4),
+                    Color(0x553B82F6),
+                    Color(0x440F172A),
+                ),
+            ),
+        )
+    }
+}
+
+@Composable
 fun SplashScreen() {
-    val extra = LocalRRExtraColors.current
     val scale = remember { Animatable(0.84f) }
     val alpha = remember { Animatable(0f) }
 
@@ -66,44 +128,38 @@ fun SplashScreen() {
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(
-                        extra.accentPrimary.copy(alpha = 0.24f),
-                        extra.accentSecondary.copy(alpha = 0.12f),
-                        NavyVoid,
-                    ),
-                ),
-            )
-            .safeDrawingPadding(),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
+        AuroraWelcomeWaveBackdrop(modifier = Modifier.fillMaxSize())
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
+                .safeDrawingPadding()
                 .scale(scale.value)
                 .alpha(alpha.value)
                 .padding(32.dp),
         ) {
-            RRBrandMark(size = 92.dp)
-            Spacer(modifier = Modifier.height(22.dp))
+            RRBrandMark(size = 108.dp)
+            Spacer(modifier = Modifier.height(24.dp))
             Text(
                 text = "RR Reminder",
-                style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.displayMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontStyle = FontStyle.Italic,
+                ),
                 color = Color.White,
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Your Time. Your Control.",
+                text = "Smart Time • Smart Life",
                 style = MaterialTheme.typography.titleMedium,
-                color = extra.accentPrimary,
+                color = Color(0xFF93C5FD),
             )
             Spacer(modifier = Modifier.height(14.dp))
             RRStatusPill(
-                text = "Founder: Ridam Raj",
-                color = extra.accentSecondary,
+                text = "Version 2.0 • Ridam Raj",
+                color = Color(0xFF38BDF8),
                 icon = Icons.Rounded.Verified,
             )
         }
@@ -118,181 +174,153 @@ fun WelcomePreviewScreen(
     timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
     onContinue: () -> Unit,
 ) {
-    val extra = LocalRRExtraColors.current
-    RRBackgroundContainer {
+    val primaryZone = remember(preferences.primaryClockZone) {
+        preferences.primaryClockZone.toZoneId()
+    }
+    val primaryTime = ScheduleCalculator.formatTime(
+        millis = nowMillis,
+        use24Hour = preferences.use24Hour,
+        zoneId = primaryZone,
+        includeSeconds = true,
+    )
+    val primaryDate = ScheduleCalculator.formatDate(
+        millis = nowMillis,
+        pattern = "EEE, ${preferences.dateFormatStyle.pattern}",
+        zoneId = primaryZone,
+    )
+    val syncLabel = when {
+        timeSyncStatus.ownerOverrideActive && !timeSyncStatus.ownerOverrideLabel.isNullOrBlank() ->
+            timeSyncStatus.ownerOverrideLabel
+        timeSyncStatus.isSynced -> timeSyncStatus.sourceLabel
+        timeSyncStatus.isSyncing -> "Syncing Google Time"
+        else -> "Live Device Clock"
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        AuroraWelcomeWaveBackdrop(modifier = Modifier.fillMaxSize())
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .safeDrawingPadding()
-                .widthIn(max = 600.dp)
+                .widthIn(max = 560.dp)
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp, vertical = 20.dp),
+                .padding(horizontal = 28.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Spacer(modifier = Modifier.height(18.dp))
+
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    RRBrandMark(size = 46.dp)
-                    Column {
-                        Text(
-                            text = "RR Reminder",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                        Text(
-                            text = "Your Time. Your Control.",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = extra.accentPrimary,
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-                RRStatusPill(
-                    text = "Founder: Ridam Raj",
-                    color = extra.accentSecondary,
-                    icon = Icons.Rounded.Verified,
-                )
-                Spacer(modifier = Modifier.height(18.dp))
-                Image(
-                    painter = painterResource(id = R.drawable.img_rr_onboarding_art),
-                    contentDescription = "RR Reminder welcome preview",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(190.dp)
-                        .clip(RoundedCornerShape(24.dp)),
-                    contentScale = ContentScale.Crop,
-                )
-                Spacer(modifier = Modifier.height(18.dp))
+                RRBrandMark(size = 116.dp)
+
+                Spacer(modifier = Modifier.height(26.dp))
+
                 Text(
-                    text = if (isFirstLaunch) "Welcome to RR Reminder" else "Welcome Back",
-                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onBackground,
+                    text = "RR Reminder",
+                    style = MaterialTheme.typography.displayMedium.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        fontStyle = FontStyle.Italic,
+                    ),
+                    color = Color.White,
                     textAlign = TextAlign.Center,
                 )
+
                 Spacer(modifier = Modifier.height(6.dp))
-                val primaryZone = preferences.primaryClockZone.toZoneId()
-                val primaryLabel = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) {
-                    "India (IST • UTC+5:30)"
-                } else {
-                    "Local (${primaryZone.id})"
-                }
+
                 Text(
-                    text = ScheduleCalculator.formatTime(
-                        millis = nowMillis,
-                        use24Hour = preferences.use24Hour,
-                        zoneId = primaryZone,
-                        includeSeconds = true,
-                    ) +
-                        " • " +
-                        ScheduleCalculator.formatDate(
-                            millis = nowMillis,
-                            pattern = "EEEE, ${preferences.dateFormatStyle.pattern}",
-                            zoneId = primaryZone,
-                        ),
-                    style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    text = "Smart Time • Smart Life",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
+                    color = Color(0xFFBBD6FF),
                     textAlign = TextAlign.Center,
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                val secondaryZone = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) {
-                    java.time.ZoneId.systemDefault()
-                } else {
-                    ScheduleCalculator.INDIA_ZONE
-                }
-                val showSecondaryIst = preferences.primaryClockZone != PrimaryClockZone.INDIA_IST
-                val syncTag = when {
-                    timeSyncStatus.isSynced -> timeSyncStatus.sourceLabel
-                    timeSyncStatus.isSyncing -> "Syncing Google Time..."
-                    else -> "System Clock"
-                }
+
+                Spacer(modifier = Modifier.height(26.dp))
+
+                Text(
+                    text = "Plan  •  Organize  •  Achieve",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+                    color = Color(0xFF7DD3FC),
+                    textAlign = TextAlign.Center,
+                )
+
+                Spacer(modifier = Modifier.height(22.dp))
+
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = extra.glassFill,
-                    border = BorderStroke(1.dp, extra.accentPrimary.copy(alpha = 0.45f)),
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color(0x880B1A3B),
+                    border = BorderStroke(1.dp, Color(0x5538BDF8)),
                     modifier = Modifier.testTag("welcome_india_time_pill"),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    Column(
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Icon(
-                            Icons.Rounded.Schedule,
-                            contentDescription = "Clock Timezone",
-                            tint = extra.accentPrimary,
-                            modifier = Modifier.size(16.dp),
-                        )
                         Text(
-                            text = if (showSecondaryIst) {
-                                "India (IST): " +
-                                    ScheduleCalculator.formatTime(
-                                        millis = nowMillis,
-                                        use24Hour = preferences.use24Hour,
-                                        zoneId = ScheduleCalculator.INDIA_ZONE,
-                                        includeSeconds = true,
-                                    ) +
-                                    " • " +
-                                    ScheduleCalculator.formatDate(
-                                        millis = nowMillis,
-                                        pattern = "EEE, ${preferences.dateFormatStyle.pattern}",
-                                        zoneId = ScheduleCalculator.INDIA_ZONE,
-                                    )
-                            } else if (secondaryZone != primaryZone) {
-                                "$primaryLabel • $syncTag"
-                            } else {
-                                "$primaryLabel • $syncTag"
-                            },
-                            style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize),
-                            color = MaterialTheme.colorScheme.onSurface,
+                            text = primaryTime,
+                            style = TabularClockMedium.copy(
+                                fontSize = MaterialTheme.typography.headlineSmall.fontSize,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            color = Color.White,
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "$primaryDate • $syncLabel",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFF93C5FD),
+                            textAlign = TextAlign.Center,
                         )
                     }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                RRCard(accentGlow = true) {
-                    Text("Welcome Preview • Aurora UI 2.0", style = MaterialTheme.typography.titleSmall)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    WelcomeFeatureHighlightRow(
-                        icon = Icons.Rounded.NotificationsActive,
-                        title = "Smart Reminders & Exact Alarms",
-                        subtitle = "Timezone-safe schedules, snooze controls, lead alerts, and reliable rings.",
-                        color = extra.accentPrimary,
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    WelcomeFeatureHighlightRow(
-                        icon = Icons.Rounded.MyLocation,
-                        title = "Live GPS Weather & World Clock",
-                        subtitle = "Real-time Open-Meteo forecast from GPS and live global timezones.",
-                        color = extra.accentSecondary,
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    WelcomeFeatureHighlightRow(
-                        icon = Icons.Rounded.Timer,
-                        title = "Workspace, Focus & Productivity AI",
-                        subtitle = "Calendar events, tasks, auto-saved notes, habits, timers & widgets.",
-                        color = extra.success,
-                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Button(
-                onClick = onContinue,
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("welcome_preview_continue_btn"),
+                    .padding(top = 28.dp),
             ) {
-                Text(if (isFirstLaunch) "Set Up RR Reminder" else "Enter RR Reminder")
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
+                RRGradientButton(
+                    text = if (isFirstLaunch) "Get Started" else "Get Started",
+                    onClick = onContinue,
+                    trailingIcon = Icons.AutoMirrored.Rounded.ArrowForward,
+                    colors = listOf(Color(0xFF1D4ED8), Color(0xFF38BDF8)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("welcome_preview_continue_btn"),
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 18.dp, height = 6.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF38BDF8)),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.35f)),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.35f)),
+                    )
+                }
             }
         }
     }

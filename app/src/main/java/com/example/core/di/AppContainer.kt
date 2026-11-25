@@ -1,7 +1,6 @@
 package com.example.core.di
 
 import android.content.Context
-import android.text.format.DateFormat
 import com.example.R
 import com.example.core.ai.AiAssistantRepository
 import com.example.core.calendar.DeviceCalendarReader
@@ -11,7 +10,6 @@ import com.example.core.datastore.UserPreferences
 import com.example.core.datastore.UserPreferencesRepository
 import com.example.core.firebase.GlobalAppConfig
 import com.example.core.firebase.OwnerConfigRepository
-import com.example.core.firebase.resolveEffectivePreferences
 import com.example.core.health.SystemHealthChecker
 import com.example.core.location.LocationHelper
 import com.example.core.network.NetworkModule
@@ -32,11 +30,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -65,7 +63,8 @@ class AppContainer(context: Context) {
             while (currentCoroutineContext().isActive) {
                 val now = networkTimeProvider.currentEpochMillis()
                 emit(now)
-                val sleepMs = (1000L - (now % 1000L)).coerceIn(50L, 1000L)
+                val remainder = ((now % 1000L) + 1000L) % 1000L
+                val sleepMs = (1000L - remainder).let { if (it < 40L) it + 1000L else it }
                 delay(sleepMs)
             }
         },
@@ -103,16 +102,7 @@ class AppContainer(context: Context) {
     private val _remoteGlobalConfig = MutableStateFlow<GlobalAppConfig?>(null)
     val remoteGlobalConfig: StateFlow<GlobalAppConfig?> = _remoteGlobalConfig.asStateFlow()
 
-    val effectivePreferences: Flow<UserPreferences> = combine(
-        preferencesRepository.preferences,
-        _remoteGlobalConfig,
-    ) { local, remote ->
-        resolveEffectivePreferences(
-            local = local,
-            remote = remote,
-            isSystem24Hour = DateFormat.is24HourFormat(appContext),
-        )
-    }
+    val effectivePreferences: Flow<UserPreferences> = preferencesRepository.preferences
 
     fun applyRemoteGlobalConfig(config: GlobalAppConfig?) {
         _remoteGlobalConfig.value = config
@@ -127,6 +117,27 @@ class AppContainer(context: Context) {
                     fixedTargetEpochMillis = config.fixedTargetEpochMillis,
                     fixedAnchorEpochMillis = config.fixedAnchorEpochMillis,
                 ),
+            )
+            val fingerprint = config.syncFingerprint()
+            containerScope.launch {
+                val current = preferencesRepository.getSnapshot()
+                if (current.lastAppliedOwnerFingerprint != fingerprint) {
+                    preferencesRepository.applyOwnerConfigOverrides(
+                        config = config,
+                        fingerprint = fingerprint,
+                    )
+                }
+            }
+        }
+        emitClockTick()
+    }
+
+    suspend fun reapplyOwnerConfigNow() {
+        val cfg = _remoteGlobalConfig.value ?: return
+        if (cfg.syncOverrideEnabled) {
+            preferencesRepository.applyOwnerConfigOverrides(
+                config = cfg,
+                fingerprint = cfg.syncFingerprint(),
             )
         }
         emitClockTick()

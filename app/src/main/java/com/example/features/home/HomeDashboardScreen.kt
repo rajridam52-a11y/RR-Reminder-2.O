@@ -6,17 +6,16 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,14 +25,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.R
+import androidx.compose.ui.unit.sp
 import com.example.core.common.VoiceReminderParser
+import com.example.core.database.AlarmEntity
 import com.example.core.database.ReminderEntity
 import com.example.core.database.ReminderPriority
 import com.example.core.database.TaskEntity
@@ -50,17 +49,17 @@ import com.example.core.network.WeatherCodeInterpreter
 import com.example.core.network.WeatherUnits
 import com.example.core.notifications.ScheduleCalculator
 import com.example.features.health.healthScoreColor
-import com.example.ui.components.AuroraClockDisplay
-import com.example.ui.components.RRBrandMark
 import com.example.ui.components.RRCard
 import com.example.ui.components.RRCircularProgressRing
-import com.example.ui.components.RRMetricBadge
 import com.example.ui.components.RRSectionHeader
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
+import com.example.ui.theme.TabularClockLarge
 import com.example.ui.theme.TabularClockMedium
 import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +68,9 @@ fun HomeDashboardScreen(
     preferences: UserPreferences,
     globalConfig: GlobalAppConfig? = null,
     timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
+    isOwnerAccount: Boolean = false,
+    onOpenDrawer: () -> Unit = {},
+    onOpenLiveClock: () -> Unit = {},
     onSyncNetworkTime: () -> Unit = {},
     onCycleClockFace: () -> Unit = {},
     onNavigateReminders: () -> Unit,
@@ -88,6 +90,7 @@ fun HomeDashboardScreen(
     onNavigateSettings: () -> Unit,
     onQuickCompleteReminder: (ReminderEntity) -> Unit,
     onQuickToggleTask: (TaskEntity) -> Unit,
+    onToggleAlarm: (AlarmEntity, Boolean) -> Unit = { _, _ -> },
     onQuickSaveReminder: (ReminderEntity) -> Unit,
     onQuickSaveTask: (TaskEntity) -> Unit,
     onMoveWidget: (Int, Int) -> Unit,
@@ -96,6 +99,7 @@ fun HomeDashboardScreen(
 ) {
     val extra = LocalRRExtraColors.current
     var showCustomizeSheet by remember { mutableStateOf(false) }
+    var showMoreToolsSheet by remember { mutableStateOf(false) }
     var showQuickAddDialog by remember { mutableStateOf(false) }
     var quickAddInitialTitle by remember { mutableStateOf("") }
     var quickAddInitialMillis by remember { mutableLongStateOf(homeState.nowMillis + 3_600_000L) }
@@ -118,6 +122,33 @@ fun HomeDashboardScreen(
         }
     }
 
+    val primaryZone = remember(preferences.primaryClockZone) {
+        preferences.primaryClockZone.toZoneId()
+    }
+    val zdt = remember(homeState.nowMillis, primaryZone) {
+        Instant.ofEpochMilli(homeState.nowMillis).atZone(primaryZone)
+    }
+    val greeting = when (zdt.hour) {
+        in 5..11 -> "Good Morning!"
+        in 12..16 -> "Good Afternoon!"
+        in 17..21 -> "Good Evening!"
+        else -> "Good Night!"
+    }
+    val isDaytime = zdt.hour in 6..18
+
+    val digitsStr = remember(homeState.nowMillis, primaryZone, preferences.use24Hour) {
+        val pat = if (preferences.use24Hour) "HH:mm:ss" else "hh:mm:ss"
+        zdt.format(DateTimeFormatter.ofPattern(pat, Locale.getDefault()))
+    }
+    val amPmStr = remember(homeState.nowMillis, primaryZone, preferences.use24Hour) {
+        if (preferences.use24Hour) "" else zdt.format(DateTimeFormatter.ofPattern("a", Locale.ENGLISH)).uppercase()
+    }
+    val dateStr = ScheduleCalculator.formatDate(
+        millis = homeState.nowMillis,
+        pattern = "EEE, ${preferences.dateFormatStyle.pattern}",
+        zoneId = primaryZone,
+    )
+
     val visibleWidgets = remember(preferences.dashboardWidgetOrder, preferences.hiddenDashboardWidgets) {
         preferences.dashboardWidgetOrder.filter { it !in preferences.hiddenDashboardWidgets }
     }
@@ -125,33 +156,39 @@ fun HomeDashboardScreen(
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        RRBrandMark(size = 34.dp)
-                        Column {
-                            Text(
-                                text = "RR Reminder",
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                            )
-                            Text(
-                                text = "Your Time. Your Control.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = extra.accentPrimary,
-                            )
-                        }
-                    }
-                },
-                actions = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = onOpenDrawer,
+                    modifier = Modifier.testTag("home_drawer_btn"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Menu,
+                        contentDescription = "Open Side Menu",
+                        tint = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     IconButton(
                         onClick = onNavigateSearch,
                         modifier = Modifier.testTag("home_search_btn"),
                     ) {
-                        Icon(Icons.Rounded.Search, contentDescription = "Smart Search & Assistant")
+                        Icon(
+                            Icons.Rounded.Search,
+                            contentDescription = "Smart Search & Assistant",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     IconButton(
                         onClick = onNavigateNotifications,
@@ -164,26 +201,34 @@ fun HomeDashboardScreen(
                                 }
                             },
                         ) {
-                            Icon(Icons.Rounded.Notifications, contentDescription = "Notification Center")
+                            Icon(
+                                Icons.Rounded.NotificationsNone,
+                                contentDescription = "Notification Center",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                    }
-                    IconButton(
-                        onClick = { showCustomizeSheet = true },
-                        modifier = Modifier.testTag("home_customize_btn"),
-                    ) {
-                        Icon(Icons.Rounded.Tune, contentDescription = "Customize Dashboard")
                     }
                     IconButton(
                         onClick = onNavigateSettings,
                         modifier = Modifier.testTag("home_settings_btn"),
                     ) {
-                        Icon(Icons.Rounded.Settings, contentDescription = "Settings")
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFFF59E0B).copy(alpha = if (isOwnerAccount) 0.22f else 0.14f),
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.WorkspacePremium,
+                                    contentDescription = if (isOwnerAccount) "Owner Account & Settings" else "Settings",
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+                        }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                ),
-            )
+                }
+            }
         },
         floatingActionButton = {
             FloatingActionButton(
@@ -193,8 +238,9 @@ fun HomeDashboardScreen(
                     voiceAmbiguityNote = null
                     showQuickAddDialog = true
                 },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                shape = CircleShape,
+                containerColor = Color(0xFF2563EB),
+                contentColor = Color.White,
                 modifier = Modifier.testTag("home_quick_add_fab"),
             ) {
                 Icon(Icons.Rounded.Add, contentDescription = "Quick Add")
@@ -205,8 +251,8 @@ fun HomeDashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (globalConfig != null &&
                 globalConfig.syncOverrideEnabled &&
@@ -236,122 +282,670 @@ fun HomeDashboardScreen(
                                 tint = extra.accentPrimary,
                                 modifier = Modifier.size(20.dp),
                             )
-                            Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = globalConfig.bannerMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Greeting + Giant Digital Live Clock Hero (Screen 2 top section)
+            item(key = "hero_greeting_clock") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 720.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = greeting,
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Icon(
+                            imageVector = if (isDaytime) Icons.Rounded.WbSunny else Icons.Rounded.NightsStay,
+                            contentDescription = null,
+                            tint = if (isDaytime) Color(0xFFF59E0B) else Color(0xFF60A5FA),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                    Text(
+                        text = "Have a great day ahead!",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Giant centered Live Clock cardless hero (tap opens Live Clock)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable(onClick = onOpenLiveClock)
+                            .padding(vertical = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                text = digitsStr,
+                                style = TabularClockLarge.copy(
+                                    fontSize = 44.sp,
+                                    lineHeight = 48.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                            if (amPmStr.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "LIVE OWNER NOTICE",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = extra.accentPrimary,
+                                    text = amPmStr,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
+                                    modifier = Modifier.padding(bottom = 6.dp),
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Subtle live sync + voice quick add row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val syncLabel = when {
+                            timeSyncStatus.ownerOverrideActive && !timeSyncStatus.ownerOverrideLabel.isNullOrBlank() ->
+                                timeSyncStatus.ownerOverrideLabel
+                            timeSyncStatus.isSynced -> timeSyncStatus.sourceLabel
+                            timeSyncStatus.isSyncing -> "Syncing..."
+                            else -> "Device Clock"
+                        }
+                        val zoneShort = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) "IST" else primaryZone.id.substringAfterLast("/")
+                        Surface(
+                            shape = CircleShape,
+                            color = extra.glassFill,
+                            border = BorderStroke(1.dp, extra.cardBorder),
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable(onClick = onSyncNetworkTime)
+                                .testTag("home_sync_time_pill"),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Sync,
+                                    contentDescription = "Sync Google time",
+                                    tint = extra.accentPrimary,
+                                    modifier = Modifier.size(13.dp),
                                 )
                                 Text(
-                                    text = globalConfig.bannerMessage,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    text = "$zoneShort • $syncLabel",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = CircleShape,
+                            color = extra.glassFill,
+                            border = BorderStroke(1.dp, extra.cardBorder),
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable {
+                                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                        putExtra(
+                                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                                        )
+                                        putExtra(
+                                            RecognizerIntent.EXTRA_PROMPT,
+                                            "Speak reminder title and time...",
+                                        )
+                                    }
+                                    runCatching { voiceLauncher.launch(intent) }.onFailure {
+                                        quickAddInitialTitle = ""
+                                        voiceAmbiguityNote = "Voice input unavailable — type reminder manually."
+                                        showQuickAddDialog = true
+                                    }
+                                }
+                                .testTag("home_voice_add_btn"),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Mic,
+                                    contentDescription = "Voice Quick Add",
+                                    tint = Color(0xFF2563EB),
+                                    modifier = Modifier.size(13.dp),
+                                )
+                                Text(
+                                    text = "Voice",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+
+                    if (homeState.overdueRemindersCount > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .clip(CircleShape)
+                                .clickable(onClick = onNavigateReminders),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    Icons.Rounded.WarningAmber,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = "${homeState.overdueRemindersCount} overdue reminder(s)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
                                 )
                             }
                         }
                     }
                 }
             }
-            items(visibleWidgets, key = { it }) { widgetKey ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 720.dp),
+
+            // Card 1: Weather Card (Screen 2)
+            item(key = "hero_weather_card") {
+                val weather = homeState.weather
+                RRCard(
+                    onClick = onNavigateWeather,
+                    modifier = Modifier.widthIn(max = 720.dp),
                 ) {
-                    when (widgetKey) {
-                        DashboardWidgetId.BRIEFING.key -> DailyBriefingHeroCard(
-                            homeState = homeState,
-                            preferences = preferences,
-                            timeSyncStatus = timeSyncStatus,
-                            onSyncNetworkTime = onSyncNetworkTime,
-                            onCycleClockFace = onCycleClockFace,
-                            onOpenOverdue = onNavigateReminders,
-                            onOpenWorldClock = onNavigateWorldClock,
-                            onVoiceQuickAdd = {
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(
-                                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
-                                    )
-                                    putExtra(
-                                        RecognizerIntent.EXTRA_PROMPT,
-                                        "Speak reminder title and time...",
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF59E0B).copy(alpha = 0.16f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = if ((weather?.weatherCode ?: 0) >= 51) Icons.Rounded.WaterDrop else if ((weather?.weatherCode ?: 0) in 2..3) Icons.Rounded.WbCloudy else Icons.Rounded.WbSunny,
+                                    contentDescription = "Weather",
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = if (weather != null) {
+                                        WeatherUnits.formatTemp(weather.currentTempC, preferences.useFahrenheit)
+                                    } else {
+                                        "--°"
+                                    },
+                                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = if (weather != null) WeatherCodeInterpreter.describe(weather.weatherCode) else "Tap to load GPS",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.LocationOn,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2563EB),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    text = weather?.cityName ?: "Weather Center",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (weather != null) {
+                                Text(
+                                    text = "Humidity ${weather.humidityPercent}% • ${WeatherUnits.formatWind(weather.windKmh, preferences.useMph)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Card 2: Next Reminder Card (Screen 2)
+            item(key = "hero_next_reminder_card") {
+                val nextReminder = homeState.upcomingReminders.firstOrNull()
+                RRCard(
+                    onClick = onNavigateReminders,
+                    modifier = Modifier.widthIn(max = 720.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF10B981).copy(alpha = 0.18f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.NotificationsActive,
+                                        contentDescription = null,
+                                        tint = Color(0xFF10B981),
+                                        modifier = Modifier.size(14.dp),
                                     )
                                 }
-                                runCatching { voiceLauncher.launch(intent) }.onFailure {
-                                    quickAddInitialTitle = ""
-                                    voiceAmbiguityNote = "Voice recognition unavailable on this device — enter reminder manually."
-                                    showQuickAddDialog = true
+                                Text(
+                                    text = "Next Reminder",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (homeState.activeRemindersCount > 0) {
+                                RRStatusPill(
+                                    text = "${homeState.activeRemindersCount} active",
+                                    color = Color(0xFF2563EB),
+                                )
+                            }
+                        }
+
+                        if (nextReminder != null) {
+                            val targetMs = nextReminder.snoozedUntilMillis ?: nextReminder.triggerAtMillis
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFF6366F1).copy(alpha = 0.16f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.EventNote,
+                                        contentDescription = null,
+                                        tint = Color(0xFF6366F1),
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = nextReminder.title,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern, primaryZone)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour, primaryZone)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onQuickCompleteReminder(nextReminder) },
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Rounded.ArrowForward,
+                                        contentDescription = "View Reminders",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    text = "No upcoming reminders • Tap to add one",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.ArrowForward,
+                                    contentDescription = "Open Reminders",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Card 3: Next Alarm Card with Live Interactive Switch (Screen 2)
+            item(key = "hero_next_alarm_card") {
+                val alarm = homeState.featuredAlarm
+                RRCard(
+                    onClick = onNavigateAlarms,
+                    modifier = Modifier.widthIn(max = 720.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF59E0B).copy(alpha = 0.16f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Alarm,
+                                    contentDescription = null,
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "Next Alarm",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (alarm != null) {
+                                    Text(
+                                        text = ScheduleCalculator.formatHourMinute(alarm.hour, alarm.minute, preferences.use24Hour),
+                                        style = TabularClockMedium.copy(
+                                            fontSize = MaterialTheme.typography.titleLarge.fontSize,
+                                            fontWeight = FontWeight.Bold,
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    val sub = if (alarm.isEnabled && alarm.nextTriggerAtMillis != null) {
+                                        "${alarm.label} • ${ScheduleCalculator.formatCountdownDelta(alarm.nextTriggerAtMillis, homeState.nowMillis)}"
+                                    } else {
+                                        "${alarm.label} • Off"
+                                    }
+                                    Text(
+                                        text = sub,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                } else {
+                                    Text(
+                                        text = "No alarm set",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+
+                        Switch(
+                            checked = alarm?.isEnabled == true,
+                            onCheckedChange = { checked ->
+                                if (alarm != null) {
+                                    onToggleAlarm(alarm, checked)
+                                } else {
+                                    onNavigateAlarms()
                                 }
                             },
-                        )
-
-                        DashboardWidgetId.QUICK_ACTIONS.key -> QuickActionsStrip(
-                            onReminders = onNavigateReminders,
-                            onAlarms = onNavigateAlarms,
-                            onTimer = onNavigateTimer,
-                            onStopwatch = onNavigateStopwatch,
-                            onWorldClock = onNavigateWorldClock,
-                            onCalendar = onNavigateCalendar,
-                            onTasks = onNavigateTasks,
-                            onNotes = onNavigateNotes,
-                            onHabits = onNavigateHabits,
-                            onFocus = onNavigateFocus,
-                            onSystemHealth = onNavigateSystemHealth,
-                        )
-
-                        DashboardWidgetId.UPCOMING_REMINDERS.key -> UpcomingRemindersCard(
-                            reminders = homeState.upcomingReminders,
-                            nowMillis = homeState.nowMillis,
-                            preferences = preferences,
-                            onViewAll = onNavigateReminders,
-                            onComplete = onQuickCompleteReminder,
-                        )
-
-                        DashboardWidgetId.NEXT_ALARM.key -> NextAlarmDashboardCard(
-                            nextAlarm = homeState.nextAlarm,
-                            nowMillis = homeState.nowMillis,
-                            preferences = preferences,
-                            onClick = onNavigateAlarms,
-                        )
-
-                        DashboardWidgetId.ACTIVE_TIMERS.key -> ActiveTimersDashboardCard(
-                            timers = homeState.activeTimers,
-                            nowMillis = homeState.nowMillis,
-                            onClick = onNavigateTimer,
-                        )
-
-                        DashboardWidgetId.WEATHER.key -> WeatherSummaryDashboardCard(
-                            homeState = homeState,
-                            preferences = preferences,
-                            onClick = onNavigateWeather,
-                        )
-
-                        DashboardWidgetId.WORLD_CLOCK.key -> WorldClockPreviewCard(
-                            cities = homeState.worldClockCities,
-                            nowMillis = homeState.nowMillis,
-                            preferences = preferences,
-                            onClick = onNavigateWorldClock,
-                        )
-
-                        DashboardWidgetId.TODAY_TASKS.key -> TodayTasksDashboardCard(
-                            homeState = homeState,
-                            onViewAll = onNavigateTasks,
-                            onToggleTask = onQuickToggleTask,
-                        )
-
-                        DashboardWidgetId.SYSTEM_HEALTH.key -> SystemHealthDashboardCard(
-                            report = homeState.healthReport,
-                            onClick = onNavigateSystemHealth,
-                        )
-
-                        DashboardWidgetId.RECENT_ACTIVITY.key -> RecentActivityCard(
-                            items = homeState.recentCompleted,
+                            modifier = Modifier.testTag("home_next_alarm_switch"),
                         )
                     }
                 }
             }
+
+            // Quick Access 4-tile grid matching Screen 2 (Reminders, Alarms, Weather, More)
+            item(key = "hero_quick_access") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 720.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    RRSectionHeader(
+                        title = "Quick Access",
+                        actionLabel = "Customize",
+                        onActionClick = { showCustomizeSheet = true },
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        QuickAccessSquareTile(
+                            label = "Reminders",
+                            icon = Icons.Rounded.NotificationsActive,
+                            iconBgColors = listOf(Color(0xFF2563EB), Color(0xFF38BDF8)),
+                            onClick = onNavigateReminders,
+                            testTag = "qa_reminders",
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuickAccessSquareTile(
+                            label = "Alarms",
+                            icon = Icons.Rounded.Alarm,
+                            iconBgColors = listOf(Color(0xFFDB2777), Color(0xFFF472B6)),
+                            onClick = onNavigateAlarms,
+                            testTag = "qa_alarms",
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuickAccessSquareTile(
+                            label = "Weather",
+                            icon = Icons.Rounded.WbSunny,
+                            iconBgColors = listOf(Color(0xFF0284C7), Color(0xFF38BDF8)),
+                            onClick = onNavigateWeather,
+                            testTag = "qa_weather",
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuickAccessSquareTile(
+                            label = "More",
+                            icon = Icons.Rounded.MoreHoriz,
+                            iconBgColors = listOf(Color(0xFF1E3A8A), Color(0xFF0F172A)),
+                            onClick = { showMoreToolsSheet = true },
+                            testTag = "qa_more_tools",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+
+            // Optional expandable/customizable telemetry cards below the clean hero dashboard
+            visibleWidgets.forEach { widgetKey ->
+                when (widgetKey) {
+                    DashboardWidgetId.ACTIVE_TIMERS.key -> {
+                        if (homeState.activeTimers.isNotEmpty()) {
+                            item(key = "widget_active_timers") {
+                                ActiveTimersDashboardCard(
+                                    timers = homeState.activeTimers,
+                                    nowMillis = homeState.nowMillis,
+                                    onClick = onNavigateTimer,
+                                )
+                            }
+                        }
+                    }
+
+                    DashboardWidgetId.WORLD_CLOCK.key -> {
+                        if (homeState.worldClockCities.isNotEmpty()) {
+                            item(key = "widget_world_clock") {
+                                WorldClockPreviewCard(
+                                    cities = homeState.worldClockCities,
+                                    nowMillis = homeState.nowMillis,
+                                    preferences = preferences,
+                                    onClick = onNavigateWorldClock,
+                                )
+                            }
+                        }
+                    }
+
+                    DashboardWidgetId.TODAY_TASKS.key -> {
+                        item(key = "widget_today_tasks") {
+                            TodayTasksDashboardCard(
+                                homeState = homeState,
+                                onViewAll = onNavigateTasks,
+                                onToggleTask = onQuickToggleTask,
+                            )
+                        }
+                    }
+
+                    DashboardWidgetId.SYSTEM_HEALTH.key -> {
+                        item(key = "widget_system_health") {
+                            SystemHealthDashboardCard(
+                                report = homeState.healthReport,
+                                onClick = onNavigateSystemHealth,
+                            )
+                        }
+                    }
+
+                    DashboardWidgetId.RECENT_ACTIVITY.key -> {
+                        if (homeState.recentCompleted.isNotEmpty()) {
+                            item(key = "widget_recent_activity") {
+                                RecentActivityCard(items = homeState.recentCompleted)
+                            }
+                        }
+                    }
+                }
+            }
+
             item { Spacer(modifier = Modifier.height(84.dp)) }
+        }
+    }
+
+    if (showMoreToolsSheet) {
+        ModalBottomSheet(onDismissRequest = { showMoreToolsSheet = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("All RR Reminder Tools", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+                val tools = listOf(
+                    Triple("Live Clock", Icons.Rounded.AccessTimeFilled, onOpenLiveClock),
+                    Triple("World Clock", Icons.Rounded.Public, onNavigateWorldClock),
+                    Triple("Timer", Icons.Rounded.Timer, onNavigateTimer),
+                    Triple("Stopwatch", Icons.Rounded.AvTimer, onNavigateStopwatch),
+                    Triple("System Health", Icons.Rounded.HealthAndSafety, onNavigateSystemHealth),
+                    Triple("Calendar", Icons.Rounded.CalendarMonth, onNavigateCalendar),
+                    Triple("Tasks", Icons.Rounded.CheckCircleOutline, onNavigateTasks),
+                    Triple("Notes", Icons.Rounded.EditNote, onNavigateNotes),
+                    Triple("Habits", Icons.Rounded.TrackChanges, onNavigateHabits),
+                    Triple("Focus", Icons.Rounded.SelfImprovement, onNavigateFocus),
+                    Triple("Smart Search", Icons.Rounded.Search, onNavigateSearch),
+                    Triple("Settings", Icons.Rounded.Settings, onNavigateSettings),
+                )
+                tools.chunked(4).forEach { rowItems ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        rowItems.forEach { (label, icon, action) ->
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = extra.glassElevatedFill,
+                                border = BorderStroke(1.dp, extra.cardBorder),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        showMoreToolsSheet = false
+                                        action()
+                                    },
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(vertical = 12.dp, horizontal = 4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = label,
+                                        tint = extra.accentPrimary,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
         }
     }
 
@@ -413,7 +1007,6 @@ fun HomeDashboardScreen(
     }
 
     if (showQuickAddDialog) {
-        val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
         QuickAddDialog(
             initialTitle = quickAddInitialTitle,
             initialMillis = quickAddInitialMillis,
@@ -455,570 +1048,53 @@ fun HomeDashboardScreen(
 }
 
 @Composable
-private fun DailyBriefingHeroCard(
-    homeState: HomeUiState,
-    preferences: UserPreferences,
-    timeSyncStatus: NetworkTimeSyncStatus,
-    onSyncNetworkTime: () -> Unit,
-    onCycleClockFace: () -> Unit,
-    onOpenOverdue: () -> Unit,
-    onOpenWorldClock: () -> Unit,
-    onVoiceQuickAdd: () -> Unit,
+private fun QuickAccessSquareTile(
+    label: String,
+    icon: ImageVector,
+    iconBgColors: List<Color>,
+    onClick: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier,
 ) {
     val extra = LocalRRExtraColors.current
-    val primaryZone = remember(preferences.primaryClockZone) {
-        preferences.primaryClockZone.toZoneId()
-    }
-    val hour = remember(homeState.nowMillis, primaryZone) {
-        Instant.ofEpochMilli(homeState.nowMillis).atZone(primaryZone).hour
-    }
-    val greeting = when (hour) {
-        in 5..11 -> "Good Morning"
-        in 12..16 -> "Good Afternoon"
-        in 17..21 -> "Good Evening"
-        else -> "Good Night"
-    }
-
-    Card(
-        shape = MaterialTheme.shapes.large,
-        border = BorderStroke(
-            1.25.dp,
-            Brush.linearGradient(listOf(extra.accentPrimary.copy(alpha = 0.55f), extra.accentSecondary.copy(alpha = 0.45f))),
-        ),
-        modifier = Modifier.fillMaxWidth(),
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = extra.glassFill,
+        border = BorderStroke(1.dp, extra.cardBorder),
+        shadowElevation = if (extra.isDark) 0.dp else 2.dp,
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag),
     ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Image(
-                painter = painterResource(id = R.drawable.img_rr_hero_banner),
-                contentDescription = "Daily briefing backdrop",
-                modifier = Modifier.matchParentSize(),
-                contentScale = ContentScale.Crop,
-            )
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                Color(0xF0050C1F),
-                                Color(0xD809142E),
-                                Color(0xB20D1B3B),
-                            ),
-                        ),
-                    ),
-            )
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        val zoneLabel = if (preferences.primaryClockZone == PrimaryClockZone.INDIA_IST) {
-                            "INDIA (IST)"
-                        } else {
-                            "LOCAL (${primaryZone.id})"
-                        }
-                        val syncText = when {
-                            timeSyncStatus.ownerOverrideActive && !timeSyncStatus.ownerOverrideLabel.isNullOrBlank() ->
-                                timeSyncStatus.ownerOverrideLabel
-                            timeSyncStatus.isSynced -> timeSyncStatus.sourceLabel
-                            timeSyncStatus.isSyncing -> "Syncing..."
-                            else -> "Device Clock"
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                text = "$greeting • $zoneLabel",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = extra.accentPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Surface(
-                                shape = CircleShape,
-                                color = extra.accentPrimary.copy(alpha = 0.16f),
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .clickable(onClick = onSyncNetworkTime)
-                                    .testTag("home_sync_time_pill"),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.Sync,
-                                        contentDescription = "Sync real time from Google",
-                                        tint = extra.accentPrimary,
-                                        modifier = Modifier.size(11.dp),
-                                    )
-                                    Text(
-                                        text = syncText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White,
-                                    )
-                                }
-                            }
-                            Surface(
-                                shape = CircleShape,
-                                color = Color.White.copy(alpha = 0.12f),
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .clickable(onClick = onCycleClockFace)
-                                    .testTag("home_clock_face_pill"),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.WatchLater,
-                                        contentDescription = "Switch clock face",
-                                        tint = extra.accentSecondary,
-                                        modifier = Modifier.size(11.dp),
-                                    )
-                                    Text(
-                                        text = preferences.clockFaceStyle.label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White,
-                                        maxLines = 1,
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        AuroraClockDisplay(
-                            nowMillis = homeState.nowMillis,
-                            zoneId = primaryZone,
-                            use24Hour = preferences.use24Hour,
-                            datePattern = preferences.dateFormatStyle.pattern,
-                            faceStyle = preferences.clockFaceStyle,
-                        )
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        RRCircularProgressRing(
-                            progress = homeState.todayProgressFraction,
-                            size = 76.dp,
-                            strokeWidth = 7.dp,
-                            trackColor = Color.White.copy(alpha = 0.16f),
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "${(homeState.todayProgressFraction * 100).toInt()}%",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = Color.White,
-                                )
-                                Text(
-                                    text = "${homeState.todayCompletedCount}/${homeState.todayTotalCount}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFB8C7EA),
-                                )
-                            }
-                        }
-                        FilledTonalIconButton(
-                            onClick = onVoiceQuickAdd,
-                            modifier = Modifier.testTag("home_voice_add_btn"),
-                        ) {
-                            Icon(Icons.Rounded.Mic, contentDescription = "Voice Quick Add")
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                val systemZone = ZoneId.systemDefault()
-                val showDeviceStrip = preferences.primaryClockZone == PrimaryClockZone.INDIA_IST &&
-                    systemZone != ScheduleCalculator.INDIA_ZONE
-                val stripZone = if (showDeviceStrip) systemZone else ScheduleCalculator.INDIA_ZONE
-                val stripTitle = if (showDeviceStrip) {
-                    "DEVICE LOCAL TIME (${systemZone.id})"
-                } else {
-                    "INDIA REAL TIME (IST • UTC+5:30)"
-                }
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color.White.copy(alpha = 0.08f),
-                    border = BorderStroke(1.dp, extra.accentPrimary.copy(alpha = 0.4f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable(onClick = onOpenWorldClock)
-                        .testTag("home_india_time_card"),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(
-                                Icons.Rounded.Public,
-                                contentDescription = stripTitle,
-                                tint = extra.accentPrimary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Column {
-                                Text(
-                                    text = stripTitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = extra.accentPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = ScheduleCalculator.formatDate(
-                                        millis = homeState.nowMillis,
-                                        pattern = "EEEE, ${preferences.dateFormatStyle.pattern}",
-                                        zoneId = stripZone,
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFFD6E3FF),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                        Text(
-                            text = ScheduleCalculator.formatTime(
-                                millis = homeState.nowMillis,
-                                use24Hour = preferences.use24Hour,
-                                zoneId = stripZone,
-                                includeSeconds = true,
-                            ),
-                            style = TabularClockMedium.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize),
-                            color = Color.White,
-                        )
-                    }
-                }
-
-                if (homeState.overdueRemindersCount > 0) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.22f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(onClick = onOpenOverdue),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Icon(
-                                Icons.Rounded.WarningAmber,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(15.dp),
-                            )
-                            Text(
-                                text = "${homeState.overdueRemindersCount} overdue reminder(s) • Tap to review",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color.White,
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    RRMetricBadge(
-                        label = "Reminders",
-                        value = "${homeState.totalRemindersCount}",
-                        color = extra.accentPrimary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    RRMetricBadge(
-                        label = "Pending",
-                        value = "${homeState.pendingTasksCount}",
-                        color = extra.warning,
-                        modifier = Modifier.weight(1f),
-                    )
-                    RRMetricBadge(
-                        label = "Done Tasks",
-                        value = "${homeState.completedTasksCount}",
-                        color = extra.accentSecondary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    RRMetricBadge(
-                        label = "Habits",
-                        value = "${homeState.activeHabitsCount}",
-                        color = extra.success,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-private data class QuickModuleTile(
-    val label: String,
-    val icon: ImageVector,
-    val onClick: () -> Unit,
-    val tag: String,
-)
-
-@Composable
-private fun QuickActionsStrip(
-    onReminders: () -> Unit,
-    onAlarms: () -> Unit,
-    onTimer: () -> Unit,
-    onStopwatch: () -> Unit,
-    onWorldClock: () -> Unit,
-    onCalendar: () -> Unit,
-    onTasks: () -> Unit,
-    onNotes: () -> Unit,
-    onHabits: () -> Unit,
-    onFocus: () -> Unit,
-    onSystemHealth: () -> Unit,
-) {
-    val extra = LocalRRExtraColors.current
-    val actions = listOf(
-        QuickModuleTile("Reminders", Icons.Rounded.NotificationsActive, onReminders, "qa_reminders"),
-        QuickModuleTile("Alarms", Icons.Rounded.Alarm, onAlarms, "qa_alarms"),
-        QuickModuleTile("Timer", Icons.Rounded.Timer, onTimer, "qa_timer"),
-        QuickModuleTile("Stopwatch", Icons.Rounded.AvTimer, onStopwatch, "qa_stopwatch"),
-        QuickModuleTile("World Clock", Icons.Rounded.Public, onWorldClock, "qa_worldclock"),
-        QuickModuleTile("System Health", Icons.Rounded.HealthAndSafety, onSystemHealth, "qa_system_health"),
-        QuickModuleTile("Calendar", Icons.Rounded.CalendarMonth, onCalendar, "qa_calendar"),
-        QuickModuleTile("Tasks", Icons.Rounded.CheckCircleOutline, onTasks, "qa_tasks"),
-        QuickModuleTile("Notes", Icons.Rounded.EditNote, onNotes, "qa_notes"),
-        QuickModuleTile("Habits", Icons.Rounded.TrackChanges, onHabits, "qa_habits"),
-        QuickModuleTile("Focus", Icons.Rounded.SelfImprovement, onFocus, "qa_focus"),
-    )
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        RRSectionHeader(title = "Modules & Quick Actions")
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(vertical = 12.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            actions.forEach { item ->
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = extra.glassFill,
-                    border = BorderStroke(1.dp, extra.cardBorder),
-                    modifier = Modifier
-                        .width(88.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .clickable(onClick = item.onClick)
-                        .testTag(item.tag),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(vertical = 12.dp, horizontal = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(
-                                            extra.accentPrimary.copy(alpha = 0.22f),
-                                            extra.accentSecondary.copy(alpha = 0.16f),
-                                        ),
-                                    ),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = item.icon,
-                                contentDescription = item.label,
-                                tint = extra.accentPrimary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = item.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(iconBgColors)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
             }
-        }
-    }
-}
-
-@Composable
-private fun UpcomingRemindersCard(
-    reminders: List<ReminderEntity>,
-    nowMillis: Long,
-    preferences: UserPreferences,
-    onViewAll: () -> Unit,
-    onComplete: (ReminderEntity) -> Unit,
-) {
-    val extra = LocalRRExtraColors.current
-    RRCard {
-        RRSectionHeader(
-            title = "Upcoming Reminders",
-            actionLabel = "See All",
-            onActionClick = onViewAll,
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        if (reminders.isEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "No upcoming reminders scheduled.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-        } else {
-            val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
-            reminders.forEach { item ->
-                val targetMs = item.snoozedUntilMillis ?: item.triggerAtMillis
-                val isOverdue = !item.isCompleted && targetMs < nowMillis
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = item.isCompleted,
-                        onCheckedChange = { onComplete(item) },
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(item.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern, primaryZone)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour, primaryZone)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isOverdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (isOverdue) {
-                        RRStatusPill(text = "Overdue", color = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-                    RRStatusPill(
-                        text = ReminderPriority.fromName(item.priority).label,
-                        color = extra.accentPrimary,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NextAlarmDashboardCard(
-    nextAlarm: com.example.core.database.AlarmEntity?,
-    nowMillis: Long,
-    preferences: UserPreferences,
-    onClick: () -> Unit,
-) {
-    val extra = LocalRRExtraColors.current
-    RRCard(onClick = onClick) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(
-                    Icons.Rounded.Alarm,
-                    contentDescription = null,
-                    tint = extra.accentPrimary,
-                    modifier = Modifier.size(28.dp),
-                )
-                Column {
-                    Text("Next Scheduled Alarm", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (nextAlarm != null && nextAlarm.nextTriggerAtMillis != null) {
-                        Text(
-                            text = "${ScheduleCalculator.formatHourMinute(nextAlarm.hour, nextAlarm.minute, preferences.use24Hour)} • ${nextAlarm.label}",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            text = ScheduleCalculator.formatCountdownDelta(nextAlarm.nextTriggerAtMillis, nowMillis),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = extra.accentPrimary,
-                        )
-                    } else {
-                        Text("No active alarms", style = MaterialTheme.typography.titleSmall)
-                    }
-                }
-            }
-            Icon(Icons.Rounded.ChevronRight, contentDescription = "Open Alarms")
-        }
-    }
-}
-
-@Composable
-private fun WeatherSummaryDashboardCard(
-    homeState: HomeUiState,
-    preferences: UserPreferences,
-    onClick: () -> Unit,
-) {
-    val extra = LocalRRExtraColors.current
-    val weather = homeState.weather
-    RRCard(onClick = onClick) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(
-                    Icons.Rounded.WbSunny,
-                    contentDescription = null,
-                    tint = extra.warning,
-                    modifier = Modifier.size(30.dp),
-                )
-                Column {
-                    if (weather != null) {
-                        val tempStr = WeatherUnits.formatTemp(weather.currentTempC, preferences.useFahrenheit)
-                        val feelsStr = WeatherUnits.formatTemp(weather.feelsLikeC, preferences.useFahrenheit)
-                        val windStr = WeatherUnits.formatWind(weather.windKmh, preferences.useMph, weather.windDirectionDeg)
-                        Text("${weather.cityName} • $tempStr", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            text = "${WeatherCodeInterpreter.describe(weather.weatherCode)} • Feels $feelsStr • Wind $windStr",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Text("Weather Center", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Tap to load live GPS weather or search a city",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            Icon(Icons.Rounded.ChevronRight, contentDescription = "Open Weather")
         }
     }
 }
@@ -1029,9 +1105,9 @@ private fun TodayTasksDashboardCard(
     onViewAll: () -> Unit,
     onToggleTask: (TaskEntity) -> Unit,
 ) {
-    RRCard {
+    RRCard(modifier = Modifier.widthIn(max = 720.dp)) {
         RRSectionHeader(
-            title = "Today's Tasks",
+            title = "Today's Tasks (${homeState.todayCompletedCount}/${homeState.todayTotalCount})",
             actionLabel = "Manage",
             onActionClick = onViewAll,
         )
@@ -1074,30 +1150,22 @@ private fun TodayTasksDashboardCard(
 @Composable
 private fun RecentActivityCard(items: List<String>) {
     val extra = LocalRRExtraColors.current
-    RRCard {
+    RRCard(modifier = Modifier.widthIn(max = 720.dp)) {
         Text("Recently Completed", style = MaterialTheme.typography.titleMedium)
         Spacer(modifier = Modifier.height(8.dp))
-        if (items.isEmpty()) {
-            Text(
-                text = "Completed reminders and tasks will appear here.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            items.forEach { entry ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(vertical = 3.dp),
-                ) {
-                    Icon(
-                        Icons.Rounded.CheckCircle,
-                        contentDescription = null,
-                        tint = extra.success,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(entry, style = MaterialTheme.typography.bodyMedium)
-                }
+        items.forEach { entry ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 3.dp),
+            ) {
+                Icon(
+                    Icons.Rounded.CheckCircle,
+                    contentDescription = null,
+                    tint = extra.success,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(entry, style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
@@ -1110,56 +1178,51 @@ private fun ActiveTimersDashboardCard(
     onClick: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
-    RRCard(onClick = onClick) {
+    RRCard(
+        onClick = onClick,
+        modifier = Modifier.widthIn(max = 720.dp),
+    ) {
         RRSectionHeader(
             title = "Active Timers",
             actionLabel = "Timers",
             onActionClick = onClick,
         )
         Spacer(modifier = Modifier.height(6.dp))
-        if (timers.isEmpty()) {
-            Text(
-                text = "No running timers. Tap to start a countdown or preset.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            timers.forEach { timer ->
-                val remaining = if (timer.isRunning && timer.endEpochMillis != null) {
-                    (timer.endEpochMillis - nowMillis).coerceAtLeast(0L)
-                } else {
-                    timer.remainingMillis
-                }
+        timers.forEach { timer ->
+            val remaining = if (timer.isRunning && timer.endEpochMillis != null) {
+                (timer.endEpochMillis - nowMillis).coerceAtLeast(0L)
+            } else {
+                timer.remainingMillis
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(
-                            Icons.Rounded.Timer,
-                            contentDescription = null,
-                            tint = if (timer.isRunning) extra.accentPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            text = timer.label,
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    RRStatusPill(
-                        text = ScheduleCalculator.formatDurationMillis(remaining),
-                        color = if (timer.isRunning) extra.accentPrimary else extra.warning,
+                    Icon(
+                        Icons.Rounded.Timer,
+                        contentDescription = null,
+                        tint = if (timer.isRunning) extra.accentPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = timer.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
+                RRStatusPill(
+                    text = ScheduleCalculator.formatDurationMillis(remaining),
+                    color = if (timer.isRunning) extra.accentPrimary else extra.warning,
+                )
             }
         }
     }
@@ -1173,73 +1236,68 @@ private fun WorldClockPreviewCard(
     onClick: () -> Unit,
 ) {
     val extra = LocalRRExtraColors.current
-    RRCard(onClick = onClick) {
+    RRCard(
+        onClick = onClick,
+        modifier = Modifier.widthIn(max = 720.dp),
+    ) {
         RRSectionHeader(
             title = "World Clock Previews",
             actionLabel = "Manage",
             onActionClick = onClick,
         )
         Spacer(modifier = Modifier.height(6.dp))
-        if (cities.isEmpty()) {
-            Text(
-                text = "Add global cities to track live timezones and day/night cycles.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                cities.forEach { city ->
-                    val zone = remember(city.zoneId) {
-                        runCatching { ZoneId.of(city.zoneId) }.getOrElse { ZoneId.systemDefault() }
-                    }
-                    val zdt = Instant.ofEpochMilli(nowMillis).atZone(zone)
-                    val isDay = zdt.hour in 6..18
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = extra.glassElevatedFill,
-                        border = BorderStroke(1.dp, extra.cardBorder),
-                        modifier = Modifier.width(142.dp),
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Icon(
-                                    imageVector = if (isDay) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
-                                    contentDescription = if (isDay) "Daytime" else "Nighttime",
-                                    tint = if (isDay) extra.warning else extra.info,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                                Text(
-                                    text = city.cityName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = ScheduleCalculator.formatTime(
-                                    millis = nowMillis,
-                                    use24Hour = preferences.use24Hour,
-                                    zoneId = zone,
-                                ),
-                                style = TabularClockMedium,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            cities.forEach { city ->
+                val zone = remember(city.zoneId) {
+                    runCatching { ZoneId.of(city.zoneId) }.getOrElse { ZoneId.systemDefault() }
+                }
+                val zdt = Instant.ofEpochMilli(nowMillis).atZone(zone)
+                val isDay = zdt.hour in 6..18
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = extra.glassElevatedFill,
+                    border = BorderStroke(1.dp, extra.cardBorder),
+                    modifier = Modifier.width(142.dp),
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (isDay) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                                contentDescription = if (isDay) "Daytime" else "Nighttime",
+                                tint = if (isDay) extra.warning else extra.info,
+                                modifier = Modifier.size(14.dp),
                             )
                             Text(
-                                text = if (zone.rules.isDaylightSavings(Instant.ofEpochMilli(nowMillis))) "DST Active" else zone.id.substringAfter("/"),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = city.cityName,
+                                style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = ScheduleCalculator.formatTime(
+                                millis = nowMillis,
+                                use24Hour = preferences.use24Hour,
+                                zoneId = zone,
+                            ),
+                            style = TabularClockMedium,
+                        )
+                        Text(
+                            text = if (zone.rules.isDaylightSavings(Instant.ofEpochMilli(nowMillis))) "DST Active" else zone.id.substringAfter("/"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -1256,7 +1314,9 @@ private fun SystemHealthDashboardCard(
     val scoreColor = healthScoreColor(report.overallHealthPercent)
     RRCard(
         onClick = onClick,
-        modifier = Modifier.testTag("home_system_health_card"),
+        modifier = Modifier
+            .widthIn(max = 720.dp)
+            .testTag("home_system_health_card"),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

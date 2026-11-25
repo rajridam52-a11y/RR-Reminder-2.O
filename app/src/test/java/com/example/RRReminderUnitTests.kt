@@ -477,4 +477,21 @@ class RRReminderUnitTests {
         assertTrue(DashboardWidgetId.DEFAULT_ORDER.contains(DashboardWidgetId.WORLD_CLOCK.key))
         assertTrue(DashboardWidgetId.DEFAULT_ORDER.contains(DashboardWidgetId.SYSTEM_HEALTH.key))
     }
+
+    @Test
+    fun `owner config syncFingerprint changes when remote override fields change`() {
+        val base = GlobalAppConfig(
+            syncOverrideEnabled = true,
+            themeMode = "dark",
+            primaryClockZone = "india_ist",
+        )
+        val same = GlobalAppConfig(
+            syncOverrideEnabled = true,
+            themeMode = "dark",
+            primaryClockZone = "india_ist",
+        )
+        val updated = base.copy(themeMode = "light")
+        assertEquals(base.syncFingerprint(), same.syncFingerprint())
+        assertFalse(base.syncFingerprint() == updated.syncFingerprint())
+    }
 }

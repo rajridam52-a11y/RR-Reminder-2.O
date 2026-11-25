@@ -6,11 +6,17 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -18,9 +24,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,46 +74,95 @@ fun RemindersScreen(
     onClearCapturedLocation: () -> Unit,
     onNavigateNotifications: () -> Unit,
 ) {
+    val extra = LocalRRExtraColors.current
     var editingReminder by remember { mutableStateOf<ReminderEntity?>(null) }
     var showEditor by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<ReminderEntity?>(null) }
+    var showSearchBar by remember { mutableStateOf(searchQuery.isNotBlank()) }
+
+    val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
+    val todayDate = remember(nowMillis, primaryZone) { Instant.ofEpochMilli(nowMillis).atZone(primaryZone).toLocalDate() }
+    val todayCount = remember(reminders, todayDate, primaryZone) {
+        reminders.count { rem ->
+            !rem.isCompleted &&
+                Instant.ofEpochMilli(rem.snoozedUntilMillis ?: rem.triggerAtMillis).atZone(primaryZone).toLocalDate() == todayDate
+        }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
-            TopAppBar(
-                title = { Text("Smart Reminders") },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                actions = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Reminders",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     IconButton(
                         onClick = onNavigateNotifications,
                         modifier = Modifier.testTag("reminders_notif_history_btn"),
                     ) {
-                        Icon(Icons.Rounded.History, contentDescription = "Notification History")
+                        Icon(
+                            Icons.Rounded.History,
+                            contentDescription = "Notification History",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    IconButton(
-                        onClick = {
-                            onClearCapturedLocation()
-                            editingReminder = null
-                            showEditor = true
-                        },
-                        modifier = Modifier.testTag("reminders_add_top_btn"),
+                    Surface(
+                        shape = CircleShape,
+                        color = extra.glassFill,
+                        border = BorderStroke(1.dp, extra.cardBorder),
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable { showSearchBar = !showSearchBar }
+                            .testTag("reminders_search_toggle"),
                     ) {
-                        Icon(Icons.Rounded.AddAlert, contentDescription = "Create Reminder")
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.Search,
+                                contentDescription = "Search Reminders",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
-                },
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    onClearCapturedLocation()
-                    editingReminder = null
-                    showEditor = true
-                },
-                modifier = Modifier.testTag("reminders_fab"),
-            ) {
-                Icon(Icons.Rounded.Add, contentDescription = "New Reminder")
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.Transparent,
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(Color(0xFF2563EB), Color(0xFF38BDF8))))
+                            .clickable {
+                                onClearCapturedLocation()
+                                editingReminder = null
+                                showEditor = true
+                            }
+                            .testTag("reminders_add_top_btn"),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.Add,
+                                contentDescription = "Create Reminder",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+                }
             }
         },
     ) { innerPadding ->
@@ -114,14 +172,19 @@ fun RemindersScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
         ) {
-            RRSearchField(
-                query = searchQuery,
-                onQueryChange = onSearchQueryChange,
-                placeholder = "Search reminders, tags, notes...",
-                testTag = "reminders_search_input",
-            )
-            Spacer(modifier = Modifier.height(10.dp))
+            AnimatedVisibility(visible = showSearchBar || searchQuery.isNotBlank()) {
+                Column {
+                    RRSearchField(
+                        query = searchQuery,
+                        onQueryChange = onSearchQueryChange,
+                        placeholder = "Search reminders, tags, notes...",
+                        testTag = "reminders_search_input",
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+            }
 
+            // Primary Filter Pills (All | Today | This Week | This Month + additional filters)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -129,40 +192,65 @@ fun RemindersScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ReminderFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = filter == selectedFilter,
-                        onClick = { onSelectFilter(filter) },
-                        label = { Text(filter.label) },
-                    )
+                    val selected = filter == selectedFilter
+                    Surface(
+                        shape = CircleShape,
+                        color = if (selected) Color(0xFF1E40AF) else extra.glassFill,
+                        border = BorderStroke(
+                            1.dp,
+                            if (selected) Color(0xFF2563EB) else extra.cardBorder,
+                        ),
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable { onSelectFilter(filter) }
+                            .testTag("reminder_filter_${filter.name.lowercase()}"),
+                    ) {
+                        Text(
+                            text = filter.label,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            ),
+                            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
                 }
             }
 
             val categories = listOf("All", "General", "Work", "Personal", "Health", "Finance")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                categories.forEach { cat ->
-                    AssistChip(
-                        onClick = { onSelectCategory(cat) },
-                        label = { Text(cat) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (selectedCategory == cat) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surface
-                            },
-                        ),
-                    )
+            if (selectedCategory != "All" || showSearchBar) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    categories.forEach { cat ->
+                        val catSelected = selectedCategory == cat
+                        Surface(
+                            shape = CircleShape,
+                            color = if (catSelected) MaterialTheme.colorScheme.primaryContainer else extra.glassFill,
+                            border = BorderStroke(1.dp, extra.cardBorder),
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { onSelectCategory(cat) },
+                        ) {
+                            Text(
+                                text = cat,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (catSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (reminders.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     RREmptyState(
                         icon = Icons.Rounded.NotificationsNone,
                         title = "No reminders match",
@@ -176,8 +264,9 @@ fun RemindersScreen(
                 }
             } else {
                 LazyColumn(
+                    modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 96.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp),
                 ) {
                     items(reminders, key = { it.id }) { item ->
                         ReminderRowCard(
@@ -193,6 +282,58 @@ fun RemindersScreen(
                             onDelete = { deleteCandidate = item },
                         )
                     }
+                }
+            }
+
+            // Bottom summary bar matching Screen 4 ("✓ X Reminders Today >")
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = extra.glassFill,
+                border = BorderStroke(1.dp, extra.cardBorder),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp, bottom = 12.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable {
+                        onSelectFilter(
+                            if (selectedFilter == ReminderFilter.COMPLETED) ReminderFilter.ALL
+                            else ReminderFilter.COMPLETED,
+                        )
+                    }
+                    .testTag("reminders_summary_bar"),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (selectedFilter == ReminderFilter.COMPLETED) Icons.Rounded.History else Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF2563EB),
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = if (selectedFilter == ReminderFilter.COMPLETED) {
+                                "Viewing Completed History (${reminders.size}) • Tap for Active"
+                            } else {
+                                "${todayCount.coerceAtLeast(reminders.count { !it.isCompleted })} Reminders Today"
+                            },
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Rounded.ChevronRight,
+                        contentDescription = "Toggle history",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -244,12 +385,22 @@ private fun ReminderRowCard(
     val repeat = RepeatType.fromName(reminder.repeatType)
     val targetMs = reminder.snoozedUntilMillis ?: reminder.triggerAtMillis
     val isOverdue = !reminder.isCompleted && targetMs < nowMillis
-    val priorityColor = when (priority) {
-        ReminderPriority.URGENT -> MaterialTheme.colorScheme.error
-        ReminderPriority.HIGH -> extra.warning
-        ReminderPriority.MEDIUM -> extra.accentPrimary
-        ReminderPriority.LOW -> extra.info
+
+    val badgeGradient = when {
+        reminder.category.equals("Health", ignoreCase = true) -> listOf(Color(0xFF10B981), Color(0xFF059669))
+        reminder.category.equals("Personal", ignoreCase = true) -> listOf(Color(0xFFA855F7), Color(0xFF7C3AED))
+        reminder.category.equals("Finance", ignoreCase = true) -> listOf(Color(0xFFF59E0B), Color(0xFFD97706))
+        reminder.category.equals("Work", ignoreCase = true) -> listOf(Color(0xFFEF4444), Color(0xFFF97316))
+        else -> listOf(Color(0xFF2563EB), Color(0xFF38BDF8))
     }
+    val badgeIcon = when {
+        reminder.category.equals("Health", ignoreCase = true) -> Icons.Rounded.EventAvailable
+        reminder.category.equals("Personal", ignoreCase = true) -> Icons.Rounded.CardGiftcard
+        reminder.category.equals("Finance", ignoreCase = true) -> Icons.Rounded.ShoppingCart
+        reminder.category.equals("Work", ignoreCase = true) -> Icons.Rounded.Groups
+        else -> Icons.Rounded.MenuBook
+    }
+
     var showSnoozeMenu by remember { mutableStateOf(false) }
 
     RRCard(
@@ -258,91 +409,94 @@ private fun ReminderRowCard(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Checkbox(
-                checked = reminder.isCompleted,
-                onCheckedChange = { onToggleComplete() },
-            )
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(badgeGradient)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = badgeIcon,
+                    contentDescription = reminder.category,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = reminder.title,
                     style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
                         textDecoration = if (reminder.isCompleted) TextDecoration.LineThrough else null,
                     ),
-                    maxLines = 2,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (reminder.description.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = reminder.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
                 val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
                 Text(
                     text = "${ScheduleCalculator.formatDate(targetMs, preferences.dateFormatStyle.pattern, primaryZone)} • ${ScheduleCalculator.formatTime(targetMs, preferences.use24Hour, primaryZone)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (isOverdue) MaterialTheme.colorScheme.error else extra.accentPrimary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isOverdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (isOverdue) {
-                        RRStatusPill(
-                            text = "Overdue",
-                            color = MaterialTheme.colorScheme.error,
-                            icon = Icons.Rounded.WarningAmber,
-                        )
-                    }
-                    RRStatusPill(text = priority.label, color = priorityColor)
-                    RRStatusPill(text = reminder.category, color = extra.accentSecondary)
-                    if (preferences.defaultReminderLeadMinutes > 0 && !reminder.isCompleted && reminder.snoozedUntilMillis == null) {
-                        RRStatusPill(
-                            text = "${preferences.defaultReminderLeadMinutes}m early",
-                            color = extra.info,
-                            icon = Icons.Rounded.NotificationsActive,
-                        )
-                    }
-                    if (repeat != RepeatType.NONE) {
-                        RRStatusPill(
-                            text = if (repeat == RepeatType.WEEKDAYS) {
-                                ScheduleCalculator.formatWeekdaysMask(reminder.repeatWeekdaysMask)
-                            } else {
-                                repeat.label
-                            },
-                            color = extra.info,
-                            icon = Icons.Rounded.Repeat,
-                        )
-                    }
-                    if (reminder.locationTriggerType != "NONE") {
-                        RRStatusPill(
-                            text = "${reminder.locationTriggerType}: ${reminder.locationName ?: "Pin"}",
-                            color = extra.success,
-                            icon = Icons.Rounded.LocationOn,
-                        )
-                    }
-                    if (!reminder.attachmentUri.isNullOrBlank()) {
-                        RRStatusPill(
-                            text = "Attachment",
-                            color = MaterialTheme.colorScheme.primary,
-                            icon = Icons.Rounded.AttachFile,
-                        )
+                if (isOverdue || repeat != RepeatType.NONE || reminder.locationTriggerType != "NONE" || priority == ReminderPriority.URGENT) {
+                    Spacer(modifier = Modifier.height(5.dp))
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (isOverdue) {
+                            RRStatusPill(
+                                text = "Overdue",
+                                color = MaterialTheme.colorScheme.error,
+                                icon = Icons.Rounded.WarningAmber,
+                            )
+                        }
+                        if (priority == ReminderPriority.URGENT || priority == ReminderPriority.HIGH) {
+                            RRStatusPill(text = priority.label, color = extra.warning)
+                        }
+                        if (repeat != RepeatType.NONE) {
+                            RRStatusPill(
+                                text = if (repeat == RepeatType.WEEKDAYS) {
+                                    ScheduleCalculator.formatWeekdaysMask(reminder.repeatWeekdaysMask)
+                                } else {
+                                    repeat.label
+                                },
+                                color = extra.info,
+                                icon = Icons.Rounded.Repeat,
+                            )
+                        }
+                        if (reminder.locationTriggerType != "NONE") {
+                            RRStatusPill(
+                                text = reminder.locationName ?: reminder.locationTriggerType,
+                                color = extra.success,
+                                icon = Icons.Rounded.LocationOn,
+                            )
+                        }
                     }
                 }
             }
-            Column(horizontalAlignment = Alignment.End) {
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!reminder.isCompleted) {
                     Box {
-                        IconButton(onClick = { showSnoozeMenu = true }) {
-                            Icon(Icons.Rounded.Snooze, contentDescription = "Snooze")
+                        IconButton(
+                            onClick = { showSnoozeMenu = true },
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.MoreVert,
+                                contentDescription = "More actions",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
                         }
                         DropdownMenu(
                             expanded = showSnoozeMenu,
@@ -351,22 +505,42 @@ private fun ReminderRowCard(
                             listOf(10, 30, 60).forEach { mins ->
                                 DropdownMenuItem(
                                     text = { Text("Snooze ${mins}m") },
+                                    leadingIcon = { Icon(Icons.Rounded.Snooze, contentDescription = null) },
                                     onClick = {
                                         showSnoozeMenu = false
                                         onSnooze(mins)
                                     },
                                 )
                             }
+                            DropdownMenuItem(
+                                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                },
+                                onClick = {
+                                    showSnoozeMenu = false
+                                    onDelete()
+                                },
+                            )
                         }
                     }
+                } else {
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.DeleteOutline,
+                            contentDescription = "Delete reminder",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        Icons.Rounded.DeleteOutline,
-                        contentDescription = "Delete reminder",
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                }
+                Checkbox(
+                    checked = reminder.isCompleted,
+                    onCheckedChange = { onToggleComplete() },
+                )
             }
         }
     }

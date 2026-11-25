@@ -1,23 +1,33 @@
 package com.example.features.weather
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.core.database.WorldClockCityEntity
 import com.example.core.datastore.UserPreferences
 import com.example.core.network.NetworkTimeSyncStatus
-import com.example.ui.components.RRCard
+import com.example.ui.components.EarthHorizonCanvas
 import com.example.ui.components.RRSearchField
-import com.example.ui.components.RRStatusPill
-import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.TabularClockMedium
 import java.time.Instant
 import java.time.ZoneId
@@ -38,155 +48,135 @@ fun WorldClockTabContent(
     onAddCity: (BuiltInCityOption) -> Unit,
     onRemoveCity: (Long) -> Unit,
 ) {
-    val extra = LocalRRExtraColors.current
     var showAddSheet by remember { mutableStateOf(false) }
 
     val utcZdt = Instant.ofEpochMilli(nowMillis).atZone(ZoneOffset.UTC)
     val indiaZdt = Instant.ofEpochMilli(nowMillis).atZone(com.example.core.notifications.ScheduleCalculator.INDIA_ZONE)
     val isIndiaDay = indiaZdt.hour in 6..18
-    val timePattern = if (preferences.use24Hour) "HH:mm:ss" else "h:mm:ss a"
+    val timePattern = if (preferences.use24Hour) "HH:mm" else "hh:mm a"
     val timeFormatter = DateTimeFormatter.ofPattern(timePattern, Locale.getDefault())
     val dateFormatter = DateTimeFormatter.ofPattern("EEE, ${preferences.dateFormatStyle.pattern}", Locale.getDefault())
-    val fullDateFormatter = DateTimeFormatter.ofPattern("EEEE, ${preferences.dateFormatStyle.pattern}", Locale.getDefault())
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF030816),
+                        Color(0xFF071330),
+                        Color(0xFF0A1D42),
+                        Color(0xFF040A18),
+                    ),
+                ),
+            ),
+    ) {
+        EarthHorizonCanvas(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
-        ) {
-            item {
-                RRCard(
-                    accentGlow = true,
-                    modifier = Modifier.testTag("worldclock_india_card"),
+                .fillMaxWidth()
+                .height(170.dp)
+                .align(Alignment.BottomCenter),
+        )
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Sub-header row with Sync + Add City
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0x660F244D),
+                    border = BorderStroke(1.dp, Color(0x4438BDF8)),
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable(onClick = onSyncNetworkTime)
+                        .testTag("worldclock_sync_time_btn"),
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(
-                                    "INDIA STANDARD TIME (IST)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = extra.accentPrimary,
-                                )
-                                RRStatusPill(
-                                    text = if (isIndiaDay) "Day" else "Night",
-                                    color = if (isIndiaDay) extra.warning else extra.accentSecondary,
-                                    icon = if (isIndiaDay) Icons.Rounded.WbSunny else Icons.Rounded.NightsStay,
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(indiaZdt.format(timeFormatter), style = TabularClockMedium)
-                            Text(
-                                text = "${indiaZdt.format(fullDateFormatter)} • UTC+05:30 • ${if (timeSyncStatus.isSynced) timeSyncStatus.sourceLabel else "Device Clock"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(
-                            onClick = onSyncNetworkTime,
-                            modifier = Modifier.testTag("worldclock_sync_time_btn"),
-                        ) {
-                            Icon(
-                                Icons.Rounded.Sync,
-                                contentDescription = "Sync real time with Google",
-                                tint = extra.accentPrimary,
-                                modifier = Modifier.size(26.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
-            item {
-                RRCard {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text("COORDINATED UNIVERSAL TIME (UTC)", style = MaterialTheme.typography.labelMedium, color = extra.accentSecondary)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(utcZdt.format(timeFormatter), style = TabularClockMedium)
-                            Text(
-                                utcZdt.format(dateFormatter),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                         Icon(
-                            Icons.Rounded.Public,
-                            contentDescription = "UTC Master Clock",
-                            tint = extra.accentSecondary,
-                            modifier = Modifier.size(34.dp),
+                            Icons.Rounded.Sync,
+                            contentDescription = "Sync real time",
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier.size(14.dp),
                         )
-                    }
-                }
-            }
-
-            items(cities, key = { it.id }) { city ->
-                val zone = runCatching { ZoneId.of(city.zoneId) }.getOrDefault(ZoneId.systemDefault())
-                val cityZdt = Instant.ofEpochMilli(nowMillis).atZone(zone)
-                val isDaytime = cityZdt.hour in 6..18
-                val offset = cityZdt.offset.id.let { if (it == "Z") "UTC+0" else "UTC$it" }
-
-                RRCard {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(city.cityName, style = MaterialTheme.typography.titleMedium)
-                                RRStatusPill(
-                                    text = if (isDaytime) "Day" else "Night",
-                                    color = if (isDaytime) extra.warning else extra.accentSecondary,
-                                    icon = if (isDaytime) Icons.Rounded.WbSunny else Icons.Rounded.NightsStay,
-                                )
-                            }
-                            Text(
-                                text = "${city.countryName} • $offset",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = cityZdt.format(dateFormatter),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                         Text(
-                            text = cityZdt.format(timeFormatter),
-                            style = TabularClockMedium,
+                            text = if (timeSyncStatus.isSynced) timeSyncStatus.sourceLabel else "Google Sync",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
                         )
-                        IconButton(onClick = { onRemoveCity(city.id) }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "Remove ${city.cityName}")
-                        }
+                    }
+                }
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFF1D4ED8),
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .clickable { showAddSheet = true }
+                        .testTag("worldclock_add_fab"),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Add, contentDescription = "Add World City", tint = Color.White)
                     }
                 }
             }
-        }
 
-        FloatingActionButton(
-            onClick = { showAddSheet = true },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .testTag("worldclock_add_fab"),
-        ) {
-            Icon(Icons.Rounded.AddLocationAlt, contentDescription = "Add World City")
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
+            ) {
+                // India IST pinned master card
+                item {
+                    WorldClockGlassCard(
+                        cityName = "India (IST)",
+                        countryCode = "IN",
+                        timeText = indiaZdt.format(timeFormatter),
+                        dateText = "${indiaZdt.format(dateFormatter)} • UTC+05:30",
+                        isDaytime = isIndiaDay,
+                        isUtcCloud = false,
+                        modifier = Modifier.testTag("worldclock_india_card"),
+                    )
+                }
+
+                items(cities, key = { it.id }) { city ->
+                    val zone = runCatching { ZoneId.of(city.zoneId) }.getOrDefault(ZoneId.systemDefault())
+                    val cityZdt = Instant.ofEpochMilli(nowMillis).atZone(zone)
+                    val isDaytime = cityZdt.hour in 6..18
+                    val code = resolveCountryCode(city.cityName, city.countryName, city.zoneId)
+                    WorldClockGlassCard(
+                        cityName = city.cityName,
+                        countryCode = code,
+                        timeText = cityZdt.format(timeFormatter),
+                        dateText = cityZdt.format(dateFormatter),
+                        isDaytime = isDaytime,
+                        isUtcCloud = city.cityName.contains("London", ignoreCase = true),
+                        onRemove = { onRemoveCity(city.id) },
+                    )
+                }
+
+                // UTC Reference card
+                item {
+                    WorldClockGlassCard(
+                        cityName = "UTC Master",
+                        countryCode = "UTC",
+                        timeText = utcZdt.format(timeFormatter),
+                        dateText = utcZdt.format(dateFormatter),
+                        isDaytime = utcZdt.hour in 6..18,
+                        isUtcCloud = true,
+                    )
+                }
+            }
         }
     }
 
@@ -230,5 +220,161 @@ fun WorldClockTabContent(
                 TextButton(onClick = { showAddSheet = false }) { Text("Close") }
             },
         )
+    }
+}
+
+@Composable
+private fun WorldClockGlassCard(
+    cityName: String,
+    countryCode: String,
+    timeText: String,
+    dateText: String,
+    isDaytime: Boolean,
+    isUtcCloud: Boolean,
+    modifier: Modifier = Modifier,
+    onRemove: (() -> Unit)? = null,
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xCC0D1A38),
+        border = BorderStroke(1.dp, Color(0x4460A5FA)),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CircularCountryFlagBadge(code = countryCode)
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = cityName,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = Color(0xFFBFD7FF),
+                )
+                Text(
+                    text = timeText,
+                    style = TabularClockMedium.copy(
+                        fontSize = MaterialTheme.typography.titleLarge.fontSize,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = Color.White,
+                )
+                Text(
+                    text = dateText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF90A7D4),
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = when {
+                        isUtcCloud && isDaytime -> Icons.Rounded.Cloud
+                        isDaytime -> Icons.Rounded.WbSunny
+                        else -> Icons.Rounded.NightsStay
+                    },
+                    contentDescription = if (isDaytime) "Daytime" else "Nighttime",
+                    tint = when {
+                        isUtcCloud && isDaytime -> Color(0xFFE2E8F0)
+                        isDaytime -> Color(0xFFFBBF24)
+                        else -> Color(0xFF93C5FD)
+                    },
+                    modifier = Modifier.size(28.dp),
+                )
+                if (onRemove != null) {
+                    IconButton(
+                        onClick = onRemove,
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "Remove $cityName",
+                            tint = Color(0xFF90A7D4),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircularCountryFlagBadge(code: String) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            when (code) {
+                "IN" -> {
+                    drawRect(Color(0xFFFF9933), topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(w, h / 3f))
+                    drawRect(Color.White, topLeft = Offset(0f, h / 3f), size = androidx.compose.ui.geometry.Size(w, h / 3f))
+                    drawRect(Color(0xFF138808), topLeft = Offset(0f, h * 2f / 3f), size = androidx.compose.ui.geometry.Size(w, h / 3f))
+                    drawCircle(Color(0xFF000080), radius = w * 0.10f, center = Offset(w / 2f, h / 2f), style = Stroke(width = 2.dp.toPx()))
+                }
+                "US" -> {
+                    for (i in 0 until 7) {
+                        val stripeColor = if (i % 2 == 0) Color(0xFFB22234) else Color.White
+                        drawRect(stripeColor, topLeft = Offset(0f, (h / 7f) * i), size = androidx.compose.ui.geometry.Size(w, h / 7f + 1f))
+                    }
+                    drawRect(Color(0xFF3C3B6E), topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(w * 0.50f, h * 0.54f))
+                }
+                "UK" -> {
+                    drawRect(Color(0xFF012169))
+                    drawLine(Color.White, Offset(0f, 0f), Offset(w, h), strokeWidth = w * 0.16f)
+                    drawLine(Color.White, Offset(w, 0f), Offset(0f, h), strokeWidth = w * 0.16f)
+                    drawRect(Color.White, Offset(w * 0.38f, 0f), androidx.compose.ui.geometry.Size(w * 0.24f, h))
+                    drawRect(Color.White, Offset(0f, h * 0.38f), androidx.compose.ui.geometry.Size(w, h * 0.24f))
+                    drawRect(Color(0xFFC8102E), Offset(w * 0.43f, 0f), androidx.compose.ui.geometry.Size(w * 0.14f, h))
+                    drawRect(Color(0xFFC8102E), Offset(0f, h * 0.43f), androidx.compose.ui.geometry.Size(w, h * 0.14f))
+                }
+                "JP" -> {
+                    drawRect(Color.White)
+                    drawCircle(Color(0xFFBC002D), radius = w * 0.26f, center = Offset(w / 2f, h / 2f))
+                }
+                else -> {
+                    drawRect(
+                        brush = Brush.linearGradient(listOf(Color(0xFF2563EB), Color(0xFF38BDF8))),
+                    )
+                }
+            }
+            drawCircle(
+                color = Color.White.copy(alpha = 0.25f),
+                radius = w / 2f,
+                center = Offset(w / 2f, h / 2f),
+                style = Stroke(width = 1.5.dp.toPx()),
+            )
+        }
+        if (code !in listOf("IN", "US", "UK", "JP")) {
+            Text(
+                text = code.take(3),
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+            )
+        }
+    }
+}
+
+private fun resolveCountryCode(cityName: String, countryName: String, zoneId: String): String {
+    val c = "$cityName $countryName $zoneId".lowercase()
+    return when {
+        "india" in c || "kolkata" in c || "delhi" in c || "mumbai" in c || "bengaluru" in c -> "IN"
+        "new york" in c || "los angeles" in c || "chicago" in c || "united states" in c -> "US"
+        "london" in c || "united kingdom" in c -> "UK"
+        "tokyo" in c || "japan" in c -> "JP"
+        "utc" in c -> "UTC"
+        else -> countryName.take(2).uppercase().ifBlank { "GL" }
     }
 }

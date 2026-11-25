@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.core.firebase.GlobalAppConfig
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
@@ -124,6 +125,7 @@ data class UserPreferences(
     val breakMinutes: Int = 5,
     val focusRemainingMs: Long = 25 * 60_000L,
     val focusEndEpochMs: Long = 0L,
+    val lastAppliedOwnerFingerprint: String = "",
 )
 
 class UserPreferencesRepository(private val context: Context) {
@@ -163,6 +165,7 @@ class UserPreferencesRepository(private val context: Context) {
         val BREAK_MINUTES = intPreferencesKey("break_minutes")
         val FOCUS_REMAINING_MS = longPreferencesKey("focus_remaining_ms")
         val FOCUS_END_EPOCH_MS = longPreferencesKey("focus_end_epoch_ms")
+        val LAST_OWNER_FINGERPRINT = stringPreferencesKey("last_owner_fingerprint")
     }
 
     val preferences: Flow<UserPreferences> = context.dataStore.data.map { prefs ->
@@ -224,6 +227,7 @@ class UserPreferencesRepository(private val context: Context) {
             breakMinutes = prefs[Keys.BREAK_MINUTES] ?: 5,
             focusRemainingMs = prefs[Keys.FOCUS_REMAINING_MS] ?: (25 * 60_000L),
             focusEndEpochMs = prefs[Keys.FOCUS_END_EPOCH_MS] ?: 0L,
+            lastAppliedOwnerFingerprint = prefs[Keys.LAST_OWNER_FINGERPRINT] ?: "",
         )
     }
 
@@ -355,5 +359,47 @@ class UserPreferencesRepository(private val context: Context) {
             it[Keys.FOCUS_REMAINING_MS] = remainingMs
             it[Keys.FOCUS_END_EPOCH_MS] = endEpochMs
         }
+    }
+
+    suspend fun applyOwnerConfigOverrides(
+        config: GlobalAppConfig,
+        fingerprint: String,
+    ) {
+        context.dataStore.edit { prefs ->
+            if (config.themeMode.isNotBlank()) {
+                prefs[Keys.THEME_MODE] = ThemeMode.fromKey(config.themeMode).key
+            }
+            if (config.accentPreset.isNotBlank()) {
+                prefs[Keys.ACCENT_PRESET] = AccentPreset.fromKey(config.accentPreset).key
+            }
+            if (config.primaryClockZone.isNotBlank()) {
+                prefs[Keys.PRIMARY_CLOCK_ZONE] = PrimaryClockZone.fromKey(config.primaryClockZone).key
+            }
+            if (config.timeFormatMode.isNotBlank()) {
+                val mode = TimeFormatMode.fromKey(config.timeFormatMode)
+                prefs[Keys.TIME_FORMAT_MODE] = mode.key
+                when (mode) {
+                    TimeFormatMode.SYSTEM -> prefs.remove(Keys.USE_24_HOUR)
+                    TimeFormatMode.H12 -> prefs[Keys.USE_24_HOUR] = false
+                    TimeFormatMode.H24 -> prefs[Keys.USE_24_HOUR] = true
+                }
+            }
+            if (config.dateFormatStyle.isNotBlank()) {
+                prefs[Keys.DATE_FORMAT] = DateFormatStyle.fromKey(config.dateFormatStyle).key
+            }
+            when (config.weatherTempUnit) {
+                "fahrenheit" -> prefs[Keys.USE_FAHRENHEIT] = true
+                "celsius" -> prefs[Keys.USE_FAHRENHEIT] = false
+            }
+            when (config.weatherWindUnit) {
+                "mph" -> prefs[Keys.USE_MPH] = true
+                "kmh" -> prefs[Keys.USE_MPH] = false
+            }
+            prefs[Keys.LAST_OWNER_FINGERPRINT] = fingerprint
+        }
+    }
+
+    suspend fun setLastAppliedOwnerFingerprint(fingerprint: String) {
+        context.dataStore.edit { it[Keys.LAST_OWNER_FINGERPRINT] = fingerprint }
     }
 }

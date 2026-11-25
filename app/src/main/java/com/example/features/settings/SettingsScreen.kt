@@ -10,7 +10,9 @@ import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -28,7 +30,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -79,6 +83,7 @@ fun SettingsScreen(
     onPublishOwnerConfig: (GlobalAppConfig) -> Unit = {},
     onResetOwnerConfig: () -> Unit = {},
     onClearOwnerMessages: () -> Unit = {},
+    onReapplyOwnerPreset: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onBack: () -> Unit,
     onOpenSystemHealth: () -> Unit = {},
@@ -106,6 +111,13 @@ fun SettingsScreen(
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
+
+    var expandAppearance by remember { mutableStateOf(true) }
+    var expandTimeRegion by remember { mutableStateOf(true) }
+    var expandNotifications by remember { mutableStateOf(true) }
+    var expandSound by remember { mutableStateOf(false) }
+    var expandLocation by remember { mutableStateOf(false) }
+    var expandBackup by remember { mutableStateOf(true) }
 
     val soundTitle = remember(preferences.notificationSoundUri) {
         val raw = preferences.notificationSoundUri
@@ -164,14 +176,27 @@ fun SettingsScreen(
         Scaffold(
             containerColor = Color.Transparent,
             topBar = {
-                TopAppBar(
-                    title = { Text("Settings & Personalization") },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            text = "Settings",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back_btn")) {
                             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                         }
                     },
+                    actions = {
+                        IconButton(
+                            onClick = { exportLauncher.launch("rr_reminder_backup.json") },
+                            modifier = Modifier.testTag("settings_quick_export_btn"),
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = "Quick JSON backup")
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent),
                 )
             },
         ) { innerPadding ->
@@ -181,63 +206,81 @@ fun SettingsScreen(
                     .padding(innerPadding)
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 36.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 104.dp),
             ) {
+                // Screen 11 Profile Hero Card
                 item {
                     RRCard(
-                        accentGlow = isOwnerAccount,
+                        accentGlow = true,
                         modifier = Modifier.testTag("settings_account_card"),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Text("Google Account", style = MaterialTheme.typography.titleMedium)
-                                    if (isOwnerAccount) {
-                                        RRStatusPill(
-                                            text = "OWNER MODE",
-                                            color = extra.accentPrimary,
-                                            icon = Icons.Rounded.AdminPanelSettings,
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                if (!currentUserName.isNullOrBlank()) {
-                                    Text(
-                                        text = currentUserName,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                    )
-                                }
-                                Text(
-                                    text = currentUserEmail ?: "Signed in with Google",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = if (isEmailVerified) "Verified Google account" else "Unverified email",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isEmailVerified) extra.success else extra.warning,
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = onSignOut,
-                                modifier = Modifier.testTag("settings_sign_out_btn"),
+                            Box(
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.linearGradient(
+                                            listOf(Color(0xFF2563EB), Color(0xFF7C3AED)),
+                                        ),
+                                    ),
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Icon(
-                                    Icons.AutoMirrored.Rounded.Logout,
-                                    contentDescription = "Sign out",
-                                    modifier = Modifier.size(16.dp),
+                                    imageVector = Icons.Rounded.Person,
+                                    contentDescription = "User profile",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(30.dp),
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Sign Out")
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = currentUserName?.takeIf { it.isNotBlank() } ?: "RR User",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                )
+                                Text(
+                                    text = if (isOwnerAccount) "Owner Mode • Admin" else "Premium Member",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = Color(0xFFFBBF24),
+                                )
+                                Text(
+                                    text = currentUserEmail ?: "Signed in with Google",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Column(
+                                horizontalAlignment = Alignment.End,
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.WorkspacePremium,
+                                    contentDescription = if (isOwnerAccount) "Owner badge" else "Member badge",
+                                    tint = Color(0xFFFBBF24),
+                                    modifier = Modifier.size(28.dp),
+                                )
+                                OutlinedButton(
+                                    onClick = onSignOut,
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .testTag("settings_sign_out_btn"),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Rounded.Logout,
+                                        contentDescription = "Sign out",
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Sign Out", style = MaterialTheme.typography.labelSmall)
+                                }
                             }
                         }
+
                         if (!isOwnerAccount && remoteConfig?.syncOverrideEnabled == true) {
                             Spacer(modifier = Modifier.height(10.dp))
                             Surface(
@@ -258,10 +301,17 @@ fun SettingsScreen(
                                         modifier = Modifier.size(16.dp),
                                     )
                                     Text(
-                                        text = "Live Owner Sync is active: remote time and global configuration updates apply automatically.",
+                                        text = "Live Owner Sync is active: published Owner updates apply automatically, and you can adjust your own settings below anytime.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f),
                                     )
+                                    TextButton(
+                                        onClick = onReapplyOwnerPreset,
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    ) {
+                                        Text("Re-sync", maxLines = 1, softWrap = false)
+                                    }
                                 }
                             }
                         }
@@ -286,10 +336,16 @@ fun SettingsScreen(
                     }
                 }
 
+                // Screen 11 Row 1: Appearance (Dark / Light / Accent / Clock Face)
                 item {
-                    RRCard(accentGlow = !isOwnerAccount) {
-                        Text("Appearance & Aurora Theme", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(10.dp))
+                    SettingsSectionCard(
+                        icon = Icons.Rounded.Palette,
+                        iconColor = Color(0xFF38BDF8),
+                        title = "Appearance",
+                        subtitle = "${preferences.themeMode.label.replace(" Mode", "")} • ${preferences.accentPreset.label}",
+                        expanded = expandAppearance,
+                        onToggleExpand = { expandAppearance = !expandAppearance },
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -298,19 +354,27 @@ fun SettingsScreen(
                                 FilterChip(
                                     selected = preferences.themeMode == mode,
                                     onClick = { onSetThemeMode(mode) },
-                                    label = { Text(mode.label.replace(" Mode", "").replace(" Default", "")) },
+                                    label = {
+                                        Text(
+                                            text = mode.label.replace(" Mode", "").replace(" Default", ""),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                        )
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .testTag("theme_mode_${mode.key}"),
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text("Accent Color", style = MaterialTheme.typography.titleSmall)
                         Spacer(modifier = Modifier.height(10.dp))
+                        Text("Accent Color", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             AccentPreset.entries.forEach { preset ->
                                 val selected = preset == preferences.accentPreset
@@ -319,7 +383,7 @@ fun SettingsScreen(
                                     color = preset.primaryDark,
                                     border = if (selected) BorderStroke(3.dp, MaterialTheme.colorScheme.onSurface) else null,
                                     modifier = Modifier
-                                        .size(46.dp)
+                                        .size(44.dp)
                                         .clip(CircleShape)
                                         .clickable { onSetAccentPreset(preset) }
                                         .testTag("accent_${preset.key}"),
@@ -332,9 +396,9 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text("Live Clock Face", style = MaterialTheme.typography.titleSmall)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -343,7 +407,7 @@ fun SettingsScreen(
                                 FilterChip(
                                     selected = preferences.clockFaceStyle == face,
                                     onClick = { onSetClockFaceStyle(face) },
-                                    label = { Text(face.label) },
+                                    label = { Text(face.label, maxLines = 1, softWrap = false) },
                                     modifier = Modifier.testTag("settings_clock_face_${face.key}"),
                                 )
                             }
@@ -351,10 +415,16 @@ fun SettingsScreen(
                     }
                 }
 
+                // Time, Date & Weather Units
                 item {
-                    RRCard {
-                        Text("Time, Date & Weather Units", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
+                    SettingsSectionCard(
+                        icon = Icons.Rounded.Schedule,
+                        iconColor = Color(0xFF60A5FA),
+                        title = "Time & Regional Units",
+                        subtitle = "${preferences.primaryClockZone.label} • ${if (preferences.use24Hour) "24-Hour" else "12-Hour"}",
+                        expanded = expandTimeRegion,
+                        onToggleExpand = { expandTimeRegion = !expandTimeRegion },
+                    ) {
                         Text("Primary Clock Timezone", style = MaterialTheme.typography.labelMedium)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -364,7 +434,7 @@ fun SettingsScreen(
                                 FilterChip(
                                     selected = preferences.primaryClockZone == zoneOpt,
                                     onClick = { onSetPrimaryClockZone(zoneOpt) },
-                                    label = { Text(zoneOpt.label) },
+                                    label = { Text(zoneOpt.label, maxLines = 1, softWrap = false) },
                                     modifier = Modifier
                                         .weight(1f)
                                         .testTag("settings_zone_${zoneOpt.key}"),
@@ -378,11 +448,18 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             TimeFormatMode.entries.forEach { mode ->
+                                val shortLabel = when (mode) {
+                                    TimeFormatMode.SYSTEM -> "System"
+                                    TimeFormatMode.H12 -> "12-Hour"
+                                    TimeFormatMode.H24 -> "24-Hour"
+                                }
                                 FilterChip(
                                     selected = preferences.timeFormatMode == mode,
                                     onClick = { onSetTimeFormatMode(mode) },
-                                    label = { Text(mode.label) },
-                                    modifier = Modifier.weight(1f),
+                                    label = { Text(shortLabel, maxLines = 1, softWrap = false) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("settings_time_fmt_${mode.key}"),
                                 )
                             }
                         }
@@ -414,7 +491,7 @@ fun SettingsScreen(
                                 label = { Text("Sunday") },
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -442,10 +519,81 @@ fun SettingsScreen(
                     }
                 }
 
+                // Screen 11 Row 2: Notifications
                 item {
-                    RRCard {
-                        Text("Alarms & Notifications", style = MaterialTheme.typography.titleMedium)
+                    SettingsSectionCard(
+                        icon = Icons.Rounded.Notifications,
+                        iconColor = Color(0xFFF43F5E),
+                        title = "Notifications",
+                        subtitle = if (notifOk && exactAlarmOk) "Active • Early Alert ${preferences.defaultReminderLeadMinutes}m" else "Check notification or exact alarm permission",
+                        expanded = expandNotifications,
+                        onToggleExpand = { expandNotifications = !expandNotifications },
+                    ) {
+                        Text("Default Reminder Early Alert", style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(0 to "Off", 5 to "5m", 15 to "15m", 30 to "30m").forEach { (mins, lbl) ->
+                                FilterChip(
+                                    selected = preferences.defaultReminderLeadMinutes == mins,
+                                    onClick = { onSetDefaultReminderLead(mins) },
+                                    label = { Text(lbl) },
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("System Notification Channels", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    if (notifOk) "Notifications permitted" else "Permission needed for alerts",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            OutlinedButton(onClick = { PermissionHelper.openAppNotificationSettings(context) }) {
+                                Text("Configure")
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Exact Alarm Access", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    if (exactAlarmOk) "Exact scheduling active" else "Grant exact alarm access for timely rings",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            RRStatusPill(
+                                text = if (exactAlarmOk) "Active" else "Check",
+                                color = if (exactAlarmOk) extra.success else extra.warning,
+                            )
+                        }
+                        if (!exactAlarmOk) {
+                            TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
+                                Text("Open Exact Alarm Settings")
+                            }
+                        }
+                    }
+                }
+
+                // Screen 11 Row 3: Sound & Vibration
+                item {
+                    SettingsSectionCard(
+                        icon = Icons.Rounded.VolumeUp,
+                        iconColor = Color(0xFFF59E0B),
+                        title = "Sound & Vibration",
+                        subtitle = "$soundTitle • Snooze ${preferences.defaultAlarmSnoozeMinutes}m",
+                        expanded = expandSound,
+                        onToggleExpand = { expandSound = !expandSound },
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -456,17 +604,6 @@ fun SettingsScreen(
                                 checked = preferences.vibrationEnabled,
                                 onCheckedChange = onSetVibrationEnabled,
                             )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Default Reminder Early Alert", style = MaterialTheme.typography.labelMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf(0 to "Off", 5 to "5m", 15 to "15m", 30 to "30m").forEach { (mins, lbl) ->
-                                FilterChip(
-                                    selected = preferences.defaultReminderLeadMinutes == mins,
-                                    onClick = { onSetDefaultReminderLead(mins) },
-                                    label = { Text(lbl) },
-                                )
-                            }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("Default Alarm Snooze", style = MaterialTheme.typography.labelMedium)
@@ -499,23 +636,42 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Reminder Sound: $soundTitle")
                         }
-                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+                }
+
+                // Screen 11 Row 4: Location & GPS
+                item {
+                    SettingsSectionCard(
+                        icon = Icons.Rounded.LocationOn,
+                        iconColor = Color(0xFF10B981),
+                        title = "Location & GPS",
+                        subtitle = if (preferences.locationRemindersEnabled) "Location Reminders On" else "Location & Calendar Integrations",
+                        expanded = expandLocation,
+                        onToggleExpand = { expandLocation = !expandLocation },
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("System Notification Channels", style = MaterialTheme.typography.titleSmall)
+                                Text("Location Reminders", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    if (notifOk) "Notifications permitted" else "Permission needed for alerts",
+                                    "Periodic battery-conscious GPS location checks only when enabled.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            OutlinedButton(onClick = { PermissionHelper.openAppNotificationSettings(context) }) {
-                                Text("Configure")
-                            }
+                            Switch(
+                                checked = preferences.locationRemindersEnabled,
+                                onCheckedChange = { enable ->
+                                    if (enable && !PermissionHelper.hasAnyLocationPermission(context)) {
+                                        locPermLauncher.launch(PermissionHelper.LOCATION_PERMISSIONS)
+                                    } else {
+                                        onSetLocationRemindersEnabled(enable)
+                                    }
+                                },
+                            )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -524,31 +680,37 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Exact Alarm Access", style = MaterialTheme.typography.titleSmall)
+                                Text("Android Calendar Sync", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    if (exactAlarmOk) "Exact scheduling active" else "Grant exact alarm access for timely rings",
+                                    "Read-only calendar events displayed in the Agenda module.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            RRStatusPill(
-                                text = if (exactAlarmOk) "Active" else "Check",
-                                color = if (exactAlarmOk) extra.success else extra.warning,
+                            Switch(
+                                checked = preferences.useDeviceCalendar,
+                                onCheckedChange = { enable ->
+                                    if (enable && !PermissionHelper.hasCalendarReadPermission(context)) {
+                                        calPermLauncher.launch(Manifest.permission.READ_CALENDAR)
+                                    } else {
+                                        onSetUseDeviceCalendar(enable)
+                                    }
+                                },
                             )
-                        }
-                        if (!exactAlarmOk) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
-                                Text("Open Exact Alarm Settings")
-                            }
                         }
                     }
                 }
 
+                // Screen 11 Row 5: Privacy & Security + Backup & Restore
                 item {
-                    RRCard {
-                        Text("Backup & Restore (Local JSON)", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(4.dp))
+                    SettingsSectionCard(
+                        icon = Icons.Rounded.Security,
+                        iconColor = Color(0xFF06B6D4),
+                        title = "Privacy & Security",
+                        subtitle = "Local JSON Backup, Restore & Policy",
+                        expanded = expandBackup,
+                        onToggleExpand = { expandBackup = !expandBackup },
+                    ) {
                         Text(
                             "Export or restore reminders, alarms, calendar events, tasks, notes, habits, routines, and world cities locally.",
                             style = MaterialTheme.typography.bodySmall,
@@ -600,63 +762,7 @@ fun SettingsScreen(
                                 Text("Restore")
                             }
                         }
-                    }
-                }
-
-                item {
-                    RRCard {
-                        Text("Privacy & Optional Integrations", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Location Reminders", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "Periodic battery-conscious GPS location checks only when enabled.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Switch(
-                                checked = preferences.locationRemindersEnabled,
-                                onCheckedChange = { enable ->
-                                    if (enable && !PermissionHelper.hasAnyLocationPermission(context)) {
-                                        locPermLauncher.launch(PermissionHelper.LOCATION_PERMISSIONS)
-                                    } else {
-                                        onSetLocationRemindersEnabled(enable)
-                                    }
-                                },
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Android Calendar Sync", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "Read-only calendar events displayed in the Agenda module.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Switch(
-                                checked = preferences.useDeviceCalendar,
-                                onCheckedChange = { enable ->
-                                    if (enable && !PermissionHelper.hasCalendarReadPermission(context)) {
-                                        calPermLauncher.launch(Manifest.permission.READ_CALENDAR)
-                                    } else {
-                                        onSetUseDeviceCalendar(enable)
-                                    }
-                                },
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             TextButton(onClick = { showPrivacyDialog = true }) { Text("Privacy Policy") }
                             TextButton(onClick = { showHelpDialog = true }) { Text("Help & Support") }
@@ -664,6 +770,7 @@ fun SettingsScreen(
                     }
                 }
 
+                // RR System Health Card
                 item {
                     val scoreColor = healthScoreColor(healthReport.overallHealthPercent)
                     RRCard(
@@ -694,7 +801,7 @@ fun SettingsScreen(
                                     )
                                 }
                                 Column {
-                                    Text("RR System Health Diagnostics", style = MaterialTheme.typography.titleMedium)
+                                    Text("RR System Health", style = MaterialTheme.typography.titleMedium)
                                     Text(
                                         text = if (healthReport.testedCount > 0) {
                                             "${healthReport.workingCount}/${healthReport.items.size} working • ${healthReport.issueCount} issue(s)"
@@ -711,6 +818,7 @@ fun SettingsScreen(
                     }
                 }
 
+                // Screen 11 Bottom Row: About RR Reminder
                 item {
                     RRCard(onClick = { showAboutDialog = true }) {
                         Row(
@@ -726,27 +834,22 @@ fun SettingsScreen(
                                 RRBrandMark(size = 46.dp)
                                 Column {
                                     Text(
-                                        "RR Reminder v${BuildConfig.VERSION_NAME}",
+                                        "About RR Reminder",
                                         style = MaterialTheme.typography.titleMedium,
                                     )
                                     Text(
-                                        "Your Time. Your Control.",
+                                        "Version ${BuildConfig.VERSION_NAME} • Founder: Ridam Raj",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = extra.accentPrimary,
                                     )
                                     Text(
-                                        "Founder: Ridam Raj",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        "Aurora UI 2.0 • Build ${BuildConfig.VERSION_CODE} • Cloud-Synced",
+                                        "Smart Time • Smart Life",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             }
-                            Icon(Icons.Rounded.Info, contentDescription = "About RR Reminder")
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = "About RR Reminder")
                         }
                     }
                 }
@@ -1311,3 +1414,76 @@ private fun OwnerModeControlCard(
         }
     }
 }
+
+@Composable
+private fun SettingsSectionCard(
+    icon: ImageVector,
+    iconColor: Color,
+    title: String,
+    subtitle: String,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val extra = LocalRRExtraColors.current
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = extra.glassFill,
+        border = BorderStroke(1.dp, extra.cardBorder),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleExpand)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = iconColor.copy(alpha = 0.22f),
+                    border = BorderStroke(1.dp, iconColor.copy(alpha = 0.48f)),
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = title,
+                            tint = iconColor,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ChevronRight,
+                    contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    content = content,
+                )
+            }
+        }
+    }
+}
+

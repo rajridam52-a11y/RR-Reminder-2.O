@@ -86,6 +86,13 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         _ownerSaveError.value = null
     }
 
+    fun reapplyOwnerPreset() {
+        viewModelScope.launch {
+            container.reapplyOwnerConfigNow()
+            _ownerSaveStatus.value = "Synced with latest Owner Live preset."
+        }
+    }
+
     fun signOut(credentialManager: CredentialManager) {
         signOutFromGoogle(
             credentialManager = credentialManager,

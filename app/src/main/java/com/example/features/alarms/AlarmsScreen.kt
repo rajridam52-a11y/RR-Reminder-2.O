@@ -7,10 +7,15 @@ import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -18,19 +23,26 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.core.database.AlarmEntity
 import com.example.core.database.AlarmHistoryEntity
 import com.example.core.datastore.UserPreferences
+import com.example.core.network.NetworkTimeSyncStatus
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
 import com.example.ui.components.RRCard
 import com.example.ui.components.RRConfirmDialog
 import com.example.ui.components.RREmptyState
+import com.example.ui.components.RRGradientButton
 import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
+import com.example.ui.theme.TabularClockLarge
 import com.example.ui.theme.TabularClockMedium
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,6 +51,10 @@ fun AlarmsTabContent(
     alarms: List<AlarmEntity>,
     history: List<AlarmHistoryEntity>,
     preferences: UserPreferences,
+    nowMillis: Long = System.currentTimeMillis(),
+    timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
+    onSyncNetworkTime: () -> Unit = {},
+    onCycleClockFace: () -> Unit = {},
     onSaveAlarm: (AlarmEntity) -> Unit,
     onToggleAlarm: (AlarmEntity, Boolean) -> Unit,
     onDeleteAlarm: (Long) -> Unit,
@@ -55,186 +71,326 @@ fun AlarmsTabContent(
     val nextAlarm = alarms.filter { it.isEnabled && it.nextTriggerAtMillis != null }
         .minByOrNull { it.nextTriggerAtMillis ?: Long.MAX_VALUE }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
-        ) {
-            if (!exactAlarmAllowed) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF040917),
+                        Color(0xFF081430),
+                        Color(0xFF050B1A),
+                    ),
+                ),
+            ),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 16.dp),
+            ) {
                 item {
-                    RRCard(containerColor = MaterialTheme.colorScheme.errorContainer) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Icon(Icons.Rounded.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Exact Alarm Permission Disabled", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "Alarms may be delayed by Android power saving until exact alarm access is granted.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
-                                Text("Enable")
-                            }
-                        }
-                    }
-                }
-            }
-
-            item {
-                RRCard(accentGlow = nextAlarm != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column {
-                            Text("NEXT ALARM", style = MaterialTheme.typography.labelMedium, color = extra.accentPrimary)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            if (nextAlarm != null && nextAlarm.nextTriggerAtMillis != null) {
-                                Text(
-                                    text = ScheduleCalculator.formatHourMinute(nextAlarm.hour, nextAlarm.minute, preferences.use24Hour),
-                                    style = TabularClockMedium,
-                                )
-                                Text(
-                                    text = "${nextAlarm.label} • ${ScheduleCalculator.formatCountdownDelta(nextAlarm.nextTriggerAtMillis)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else {
-                                Text("No upcoming alarms", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilterChip(
+                                selected = !showHistory,
+                                onClick = { showHistory = false },
+                                label = { Text("Alarms (${alarms.size})") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF1D4ED8),
+                                    selectedLabelColor = Color.White,
+                                    containerColor = Color(0xFF0E1B36),
+                                    labelColor = Color(0xFFA2B8DE),
+                                ),
+                            )
+                            FilterChip(
+                                selected = showHistory,
+                                onClick = { showHistory = true },
+                                label = { Text("History (${history.size})") },
+                                leadingIcon = { Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF1D4ED8),
+                                    selectedLabelColor = Color.White,
+                                    containerColor = Color(0xFF0E1B36),
+                                    labelColor = Color(0xFFA2B8DE),
+                                ),
+                            )
+                        }
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF1D4ED8),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    editingAlarm = null
+                                    showEditor = true
+                                }
+                                .testTag("alarms_fab"),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Rounded.Add, contentDescription = "Add Alarm", tint = Color.White)
                             }
                         }
-                        FilterChip(
-                            selected = showHistory,
-                            onClick = { showHistory = !showHistory },
-                            label = { Text(if (showHistory) "Alarms" else "History (${history.size})") },
-                            leadingIcon = { Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        )
                     }
                 }
-            }
 
-            if (!showHistory) {
-                if (alarms.isEmpty()) {
+                if (!exactAlarmAllowed) {
                     item {
-                        RREmptyState(
-                            icon = Icons.Rounded.AlarmOff,
-                            title = "No alarms set",
-                            subtitle = "Create a one-time or recurring weekday alarm with gradual volume and custom ringtones.",
-                            actionLabel = "Add Alarm",
-                            onActionClick = {
-                                editingAlarm = null
-                                showEditor = true
-                            },
-                        )
-                    }
-                } else {
-                    items(alarms, key = { it.id }) { alarm ->
-                        RRCard(
-                            onClick = {
-                                editingAlarm = alarm
-                                showEditor = true
-                            },
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0x33E11D48),
+                            border = BorderStroke(1.dp, Color(0x77FB7185)),
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
+                                Icon(Icons.Rounded.Warning, contentDescription = null, tint = Color(0xFFFB7185))
                                 Column(modifier = Modifier.weight(1f)) {
+                                    Text("Exact Alarm Permission Disabled", style = MaterialTheme.typography.titleSmall, color = Color.White)
                                     Text(
-                                        text = ScheduleCalculator.formatHourMinute(alarm.hour, alarm.minute, preferences.use24Hour),
-                                        style = TabularClockMedium,
-                                        color = if (alarm.isEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        "Grant exact alarm permission so alarms fire reliably.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFD6E3FF),
                                     )
-                                    Text(
-                                        text = "${alarm.label} • ${ScheduleCalculator.formatWeekdaysMask(alarm.repeatDaysMask)}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        RRStatusPill(text = alarm.ringtoneTitle, color = extra.accentPrimary)
-                                        if (alarm.gradualVolume) {
-                                            RRStatusPill(text = "Fade-in", color = extra.info)
-                                        }
-                                        RRStatusPill(text = "Snooze ${alarm.snoozeMinutes}m", color = extra.accentSecondary)
-                                    }
                                 }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Switch(
-                                        checked = alarm.isEnabled,
-                                        onCheckedChange = { onToggleAlarm(alarm, it) },
-                                        modifier = Modifier.testTag("alarm_toggle_${alarm.id}"),
-                                    )
-                                    IconButton(onClick = { deleteCandidate = alarm }) {
-                                        Icon(
-                                            Icons.Rounded.DeleteOutline,
-                                            contentDescription = "Delete alarm",
-                                            tint = MaterialTheme.colorScheme.error,
-                                        )
-                                    }
+                                TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
+                                    Text("Enable", color = Color(0xFF38BDF8))
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                if (history.isNotEmpty()) {
-                    item {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = onClearHistory) { Text("Clear History") }
+
+                if (!showHistory) {
+                    if (alarms.isEmpty()) {
+                        item {
+                            RREmptyState(
+                                icon = Icons.Rounded.AlarmOff,
+                                title = "No alarms set",
+                                subtitle = "Create a one-time or recurring alarm with custom tones and fade-in volume.",
+                                actionLabel = "Add Alarm",
+                                onActionClick = {
+                                    editingAlarm = null
+                                    showEditor = true
+                                },
+                            )
+                        }
+                    } else {
+                        items(alarms, key = { it.id }) { alarm ->
+                            val repeatText = if (alarm.repeatDaysMask == 0) {
+                                "One time"
+                            } else {
+                                ScheduleCalculator.formatWeekdaysMask(alarm.repeatDaysMask)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xCC0D1A38),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (alarm.isEnabled) Color(0x5538BDF8) else Color(0x2860A5FA),
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .clickable {
+                                        editingAlarm = alarm
+                                        showEditor = true
+                                    },
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = ScheduleCalculator.formatHourMinute(alarm.hour, alarm.minute, preferences.use24Hour),
+                                            style = TabularClockLarge.copy(
+                                                fontSize = MaterialTheme.typography.headlineMedium.fontSize,
+                                                fontWeight = FontWeight.Bold,
+                                            ),
+                                            color = if (alarm.isEnabled) Color.White else Color(0xFF8AA4D6),
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = repeatText,
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            color = Color.White.copy(alpha = if (alarm.isEnabled) 0.9f else 0.6f),
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Rounded.MusicNote,
+                                                contentDescription = null,
+                                                tint = Color(0xFFA855F7),
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                            Text(
+                                                text = "${alarm.label} • ${alarm.ringtoneTitle}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF9EB5DF),
+                                                maxLines = 1,
+                                            )
+                                        }
+                                    }
+
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Switch(
+                                            checked = alarm.isEnabled,
+                                            onCheckedChange = { onToggleAlarm(alarm, it) },
+                                            modifier = Modifier.testTag("alarm_toggle_${alarm.id}"),
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = { deleteCandidate = alarm },
+                                                modifier = Modifier.size(30.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Rounded.DeleteOutline,
+                                                    contentDescription = "Delete alarm",
+                                                    tint = Color(0xFFFB7185),
+                                                    modifier = Modifier.size(17.dp),
+                                                )
+                                            }
+                                            Icon(
+                                                Icons.Rounded.ChevronRight,
+                                                contentDescription = "Edit alarm",
+                                                tint = Color(0xFF8AA4D6),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-                if (history.isEmpty()) {
+
+                    // Bottom Next Alarm summary card (Screen 5)
                     item {
-                        RREmptyState(
-                            icon = Icons.Rounded.History,
-                            title = "No alarm history yet",
-                            subtitle = "Triggered, snoozed, and dismissed alarm events are logged here.",
-                        )
-                    }
-                } else {
-                    items(history, key = { it.id }) { h ->
-                        RRCard {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xDD0B1733),
+                            border = BorderStroke(1.dp, Color(0x4438BDF8)),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                Column {
-                                    Text(h.label, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "${ScheduleCalculator.formatDate(h.triggeredAtMillis, preferences.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(h.triggeredAtMillis, preferences.use24Hour)}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0x33FBBF24)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Schedule,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFBBF24),
+                                        modifier = Modifier.size(22.dp),
                                     )
                                 }
-                                RRStatusPill(text = h.action, color = extra.accentPrimary)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Next Alarm",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.White,
+                                    )
+                                    Text(
+                                        text = if (nextAlarm != null && nextAlarm.nextTriggerAtMillis != null) {
+                                            "${ScheduleCalculator.formatCountdownDelta(nextAlarm.nextTriggerAtMillis, nowMillis)} • ${ScheduleCalculator.formatHourMinute(nextAlarm.hour, nextAlarm.minute, preferences.use24Hour)}"
+                                        } else {
+                                            "No upcoming alarms enabled"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF9EB5DF),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if (history.isNotEmpty()) {
+                        item {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = onClearHistory) { Text("Clear History", color = Color(0xFF38BDF8)) }
+                            }
+                        }
+                    }
+                    if (history.isEmpty()) {
+                        item {
+                            RREmptyState(
+                                icon = Icons.Rounded.History,
+                                title = "No alarm history yet",
+                                subtitle = "Triggered, snoozed, and dismissed alarm events are logged here.",
+                            )
+                        }
+                    } else {
+                        items(history, key = { it.id }) { h ->
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color(0xCC0D1A38),
+                                border = BorderStroke(1.dp, Color(0x3360A5FA)),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column {
+                                        Text(h.label, style = MaterialTheme.typography.titleSmall, color = Color.White)
+                                        Text(
+                                            "${ScheduleCalculator.formatDate(h.triggeredAtMillis, preferences.dateFormatStyle.pattern)} • ${ScheduleCalculator.formatTime(h.triggeredAtMillis, preferences.use24Hour)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF9EB5DF),
+                                        )
+                                    }
+                                    RRStatusPill(text = h.action, color = extra.accentPrimary)
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        FloatingActionButton(
-            onClick = {
-                editingAlarm = null
-                showEditor = true
-            },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .testTag("alarms_fab"),
-        ) {
-            Icon(Icons.Rounded.AddAlarm, contentDescription = "Add Alarm")
+            // Bottom "+ Add Alarm" CTA pill matching Screen 5
+            RRGradientButton(
+                text = "Add Alarm",
+                leadingIcon = Icons.Rounded.Add,
+                colors = listOf(Color(0xFF2563EB), Color(0xFF38BDF8)),
+                onClick = {
+                    editingAlarm = null
+                    showEditor = true
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                    .height(48.dp)
+                    .testTag("alarms_add_cta"),
+            )
         }
     }
 

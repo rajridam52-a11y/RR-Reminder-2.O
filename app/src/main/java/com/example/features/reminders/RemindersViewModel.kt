@@ -13,7 +13,10 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 enum class ReminderFilter(val label: String) {
-    ALL("Upcoming"),
+    ALL("All"),
+    TODAY("Today"),
+    THIS_WEEK("This Week"),
+    THIS_MONTH("This Month"),
     OVERDUE("Overdue"),
     HIGH_PRIORITY("High / Urgent"),
     RECURRING("Recurring"),
@@ -47,13 +50,20 @@ class RemindersViewModel(private val container: AppContainer) : ViewModel() {
         _searchQuery,
         _selectedFilter,
         _selectedCategory,
-        tickerFlow,
-    ) { list, query, filter, cat, now ->
+        combine(tickerFlow, container.effectivePreferences) { now, prefs -> now to prefs },
+    ) { list, query, filter, cat, (now, prefs) ->
         val q = query.trim().lowercase()
+        val zone = prefs.primaryClockZone.toZoneId()
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val weekEnd = today.plusDays(7)
         list.filter { item ->
             val targetMs = item.snoozedUntilMillis ?: item.triggerAtMillis
+            val itemDate = java.time.Instant.ofEpochMilli(targetMs).atZone(zone).toLocalDate()
             val matchesFilter = when (filter) {
                 ReminderFilter.ALL -> !item.isCompleted
+                ReminderFilter.TODAY -> !item.isCompleted && itemDate == today
+                ReminderFilter.THIS_WEEK -> !item.isCompleted && !itemDate.isBefore(today) && !itemDate.isAfter(weekEnd)
+                ReminderFilter.THIS_MONTH -> !item.isCompleted && itemDate.year == today.year && itemDate.month == today.month
                 ReminderFilter.OVERDUE -> !item.isCompleted && targetMs < now
                 ReminderFilter.HIGH_PRIORITY -> !item.isCompleted &&
                     (item.priority == ReminderPriority.HIGH.name || item.priority == ReminderPriority.URGENT.name)

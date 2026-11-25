@@ -38,6 +38,7 @@ data class HomeUiState(
     val nowMillis: Long = System.currentTimeMillis(),
     val upcomingReminders: List<ReminderEntity> = emptyList(),
     val nextAlarm: AlarmEntity? = null,
+    val featuredAlarm: AlarmEntity? = null,
     val activeTimers: List<TimerEntity> = emptyList(),
     val weather: WeatherCacheEntity? = null,
     val worldClockCities: List<WorldClockCityEntity> = emptyList(),
@@ -112,6 +113,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
         val nextAlarm = alarms.filter { it.isEnabled && it.nextTriggerAtMillis != null }
             .minByOrNull { it.nextTriggerAtMillis ?: Long.MAX_VALUE }
+        val featuredAlarm = nextAlarm ?: alarms.firstOrNull()
 
         val activeTimers = timers.filter { it.isRunning || it.remainingMillis in 1 until it.durationMillis }
             .sortedByDescending { it.isRunning }
@@ -155,6 +157,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             nowMillis = now,
             upcomingReminders = activeReminders.take(4),
             nextAlarm = nextAlarm,
+            featuredAlarm = featuredAlarm,
             activeTimers = activeTimers.take(3),
             weather = weather,
             worldClockCities = worldCities.take(4),
@@ -355,6 +358,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun quickToggleTask(task: TaskEntity) {
         viewModelScope.launch { container.taskRepository.toggleTaskComplete(task) }
+    }
+
+    fun quickToggleAlarm(alarm: AlarmEntity, enabled: Boolean) {
+        viewModelScope.launch { container.alarmRepository.toggleAlarm(alarm, enabled) }
     }
 
     fun markAllNotificationsRead() {

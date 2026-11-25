@@ -105,6 +105,19 @@ data class GlobalAppConfig(
 
     fun toCreateFieldMap(createdAtValue: Any, updatedAtValue: Any): Map<String, Any> =
         toMutableFieldMap(updatedAtValue) + mapOf("createdAt" to createdAtValue)
+
+    fun syncFingerprint(): String = listOf(
+        syncOverrideEnabled,
+        primaryClockZone,
+        timeFormatMode,
+        dateFormatStyle,
+        themeMode,
+        accentPreset,
+        weatherTempUnit,
+        weatherWindUnit,
+        updatedAt?.seconds ?: 0L,
+        updatedAt?.nanoseconds ?: 0,
+    ).joinToString("|")
 }
 
 fun resolveEffectivePreferences(

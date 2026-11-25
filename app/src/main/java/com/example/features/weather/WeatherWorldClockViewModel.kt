@@ -94,17 +94,19 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
 
     init {
         viewModelScope.launch {
-            val prefs = container.preferencesRepository.getSnapshot()
-            val cache = container.database.weatherCacheDao().getCacheSync()
-            val now = container.networkTimeProvider.currentEpochMillis()
-            val isStale = cache == null || (now - cache.updatedAtMillis) > STALE_CACHE_MS
-            if (container.locationHelper.hasLocationPermission() &&
-                container.locationHelper.isGpsEnabled() &&
-                !prefs.hasSavedWeatherLocation
-            ) {
-                fetchWeatherByCurrentLocation()
-            } else if (prefs.hasSavedWeatherLocation && isStale) {
-                refreshSavedWeather()
+            runCatching {
+                val prefs = container.preferencesRepository.getSnapshot()
+                val cache = container.database.weatherCacheDao().getCacheSync()
+                val now = container.networkTimeProvider.currentEpochMillis()
+                val isStale = cache == null || (now - cache.updatedAtMillis) > STALE_CACHE_MS
+                if (container.locationHelper.hasLocationPermission() &&
+                    container.locationHelper.isGpsEnabled() &&
+                    !prefs.hasSavedWeatherLocation
+                ) {
+                    fetchWeatherByCurrentLocation()
+                } else if (prefs.hasSavedWeatherLocation && isStale) {
+                    refreshSavedWeather()
+                }
             }
         }
     }

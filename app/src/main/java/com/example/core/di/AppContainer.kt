@@ -2,6 +2,7 @@ package com.example.core.di
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.core.ai.AiAssistantRepository
@@ -23,7 +24,9 @@ import com.example.core.notifications.RRChannels
 import com.example.core.notifications.RRNotificationManager
 import com.example.core.notifications.ReminderAlarmScheduler
 import com.example.data.*
+import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -33,6 +36,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -40,12 +44,20 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
-    private val containerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e("AppContainer", "Recovered from background coroutine error", throwable)
+    }
+    private val containerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + exceptionHandler)
 
     val database: RRDatabase by lazy { RRDatabase.getInstance(appContext) }
     val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository(appContext) }
-    val firestore: FirebaseFirestore by lazy {
-        FirebaseFirestore.getInstance(appContext.getString(R.string.firestore_database_id))
+    val firestore: FirebaseFirestore? by lazy {
+        runCatching {
+            if (FirebaseApp.getApps(appContext).isEmpty()) {
+                FirebaseApp.initializeApp(appContext)
+            }
+            FirebaseFirestore.getInstance(appContext.getString(R.string.firestore_database_id))
+        }.getOrNull()
     }
     val ownerConfigRepository: OwnerConfigRepository by lazy { OwnerConfigRepository(firestore) }
     val notificationManager: RRNotificationManager by lazy {
@@ -75,28 +87,34 @@ class AppContainer(context: Context) {
 
         // In-app running timer expiration watcher (zero idle cost when no timers are active)
         containerScope.launch {
-            timerRepository.timers.collectLatest { list ->
-                val running = list.filter { it.isRunning && it.endEpochMillis != null }
-                if (running.isEmpty()) return@collectLatest
-                while (isActive) {
-                    val now = System.currentTimeMillis()
-                    val expired = running.filter { (it.endEpochMillis ?: Long.MAX_VALUE) <= now }
-                    if (expired.isNotEmpty()) {
-                        expired.forEach { t ->
-                            val finalized = timerRepository.finalizeExpiredTimer(
-                                timerId = t.id,
-                                nowMillis = now,
-                                fromReceiver = false,
-                            )
-                            if (finalized != null) {
-                                triggerTimerCompletionAlert(finalized)
-                            }
-                        }
-                        break
-                    }
-                    delay(250L)
+            timerRepository.timers
+                .catch { err ->
+                    Log.e("AppContainer", "Timer watcher recovered from DB error", err)
                 }
-            }
+                .collectLatest { list ->
+                    val running = list.filter { it.isRunning && it.endEpochMillis != null }
+                    if (running.isEmpty()) return@collectLatest
+                    while (isActive) {
+                        val now = System.currentTimeMillis()
+                        val expired = running.filter { (it.endEpochMillis ?: Long.MAX_VALUE) <= now }
+                        if (expired.isNotEmpty()) {
+                            expired.forEach { t ->
+                                runCatching {
+                                    val finalized = timerRepository.finalizeExpiredTimer(
+                                        timerId = t.id,
+                                        nowMillis = now,
+                                        fromReceiver = false,
+                                    )
+                                    if (finalized != null) {
+                                        triggerTimerCompletionAlert(finalized)
+                                    }
+                                }
+                            }
+                            break
+                        }
+                        delay(250L)
+                    }
+                }
         }
     }
 
@@ -129,7 +147,7 @@ class AppContainer(context: Context) {
     }
 
     suspend fun syncClockAndEmit() {
-        networkTimeProvider.syncNow()
+        runCatching { networkTimeProvider.syncNow() }
         emitClockTick()
     }
 
@@ -165,12 +183,14 @@ class AppContainer(context: Context) {
             )
             val fingerprint = config.syncFingerprint()
             containerScope.launch {
-                val current = preferencesRepository.getSnapshot()
-                if (current.lastAppliedOwnerFingerprint != fingerprint) {
-                    preferencesRepository.applyOwnerConfigOverrides(
-                        config = config,
-                        fingerprint = fingerprint,
-                    )
+                runCatching {
+                    val current = preferencesRepository.getSnapshot()
+                    if (current.lastAppliedOwnerFingerprint != fingerprint) {
+                        preferencesRepository.applyOwnerConfigOverrides(
+                            config = config,
+                            fingerprint = fingerprint,
+                        )
+                    }
                 }
             }
         }

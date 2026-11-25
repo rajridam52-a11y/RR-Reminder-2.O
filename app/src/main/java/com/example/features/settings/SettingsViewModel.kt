@@ -93,7 +93,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun signOut(credentialManager: CredentialManager) {
+    fun signOut(credentialManager: CredentialManager?) {
         signOutFromGoogle(
             credentialManager = credentialManager,
             scope = viewModelScope,

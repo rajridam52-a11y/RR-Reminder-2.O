@@ -3,10 +3,12 @@ package com.example.core.datastore
 import android.content.Context
 import android.text.format.DateFormat
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -15,10 +17,15 @@ import com.example.core.firebase.GlobalAppConfig
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rr_user_prefs")
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "rr_user_prefs",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
 
 enum class DashboardWidgetId(val key: String, val title: String) {
     BRIEFING("briefing", "Live Clock & Briefing"),
@@ -168,7 +175,11 @@ class UserPreferencesRepository(private val context: Context) {
         val LAST_OWNER_FINGERPRINT = stringPreferencesKey("last_owner_fingerprint")
     }
 
-    val preferences: Flow<UserPreferences> = context.dataStore.data.map { prefs ->
+    val preferences: Flow<UserPreferences> = context.dataStore.data
+        .catch { err ->
+            if (err is IOException) emit(emptyPreferences()) else throw err
+        }
+        .map { prefs ->
         val orderRaw = prefs[Keys.WIDGET_ORDER]
         val orderList = if (orderRaw.isNullOrBlank()) {
             DashboardWidgetId.DEFAULT_ORDER

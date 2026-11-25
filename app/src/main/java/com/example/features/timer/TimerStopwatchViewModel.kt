@@ -57,23 +57,25 @@ class TimerStopwatchViewModel(private val container: AppContainer) : ViewModel()
 
     init {
         viewModelScope.launch {
-            val prefs = container.preferencesRepository.getSnapshot()
-            if (!userInteractedStopwatch) {
-                swRunning = prefs.stopwatchRunning
-                swStartNanos = prefs.stopwatchStartElapsedNanos
-                swAccumNanos = prefs.stopwatchAccumulatedNanos
-                swLaps = prefs.stopwatchLapsCsv
-                    .split(",")
-                    .mapNotNull { it.toLongOrNull() }
-                    .toMutableList()
-                // Guard against reboot resetting elapsedRealtimeNanos below stored start
-                val nowMono = SystemClock.elapsedRealtimeNanos()
-                if (swRunning && nowMono < swStartNanos) {
-                    swStartNanos = nowMono
-                }
-                emitStopwatchState()
-                if (swRunning) {
-                    startStopwatchTicker()
+            runCatching {
+                val prefs = container.preferencesRepository.getSnapshot()
+                if (!userInteractedStopwatch) {
+                    swRunning = prefs.stopwatchRunning
+                    swStartNanos = prefs.stopwatchStartElapsedNanos
+                    swAccumNanos = prefs.stopwatchAccumulatedNanos
+                    swLaps = prefs.stopwatchLapsCsv
+                        .split(",")
+                        .mapNotNull { it.toLongOrNull() }
+                        .toMutableList()
+                    // Guard against reboot resetting elapsedRealtimeNanos below stored start
+                    val nowMono = SystemClock.elapsedRealtimeNanos()
+                    if (swRunning && nowMono < swStartNanos) {
+                        swStartNanos = nowMono
+                    }
+                    emitStopwatchState()
+                    if (swRunning) {
+                        startStopwatchTicker()
+                    }
                 }
             }
         }

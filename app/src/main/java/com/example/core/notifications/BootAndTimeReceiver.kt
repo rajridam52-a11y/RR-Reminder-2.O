@@ -3,6 +3,7 @@ package com.example.core.notifications
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.example.core.database.RRDatabase
 import com.example.widgets.WidgetUpdateHelper
 import kotlinx.coroutines.CoroutineScope
@@ -21,8 +22,10 @@ class BootAndTimeReceiver : BroadcastReceiver() {
                     val scheduler = ReminderAlarmScheduler(appContext)
                     scheduler.rescheduleAll(db)
                     WidgetUpdateHelper.updateAllWidgets(appContext)
+                } catch (t: Throwable) {
+                    Log.e("BootAndTimeReceiver", "Failed processing broadcast $action", t)
                 } finally {
-                    pendingResult.finish()
+                    runCatching { pendingResult.finish() }
                 }
             }
         }

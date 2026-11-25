@@ -32,7 +32,7 @@ import kotlinx.coroutines.launch
         CalendarEventEntity::class,
         NotificationLogEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class RRDatabase : RoomDatabase() {
@@ -54,30 +54,60 @@ abstract class RRDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: RRDatabase? = null
 
+        private fun addColumnIfMissing(
+            db: SupportSQLiteDatabase,
+            tableName: String,
+            columnName: String,
+            columnDefinition: String,
+        ) {
+            val existingColumns = mutableSetOf<String>()
+            db.query("PRAGMA table_info(`$tableName`)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                while (cursor.moveToNext()) {
+                    if (nameIndex >= 0) {
+                        existingColumns.add(cursor.getString(nameIndex))
+                    }
+                }
+            }
+            if (columnName !in existingColumns) {
+                db.execSQL("ALTER TABLE `$tableName` ADD COLUMN `$columnName` $columnDefinition")
+            }
+        }
+
+        private fun ensureV2AndV3SchemaElements(db: SupportSQLiteDatabase) {
+            addColumnIfMissing(db, "weather_cache", "apiTimezone", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing(db, "weather_cache", "windDirectionDeg", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "weather_cache", "pressureHpa", "REAL NOT NULL DEFAULT 0.0")
+            addColumnIfMissing(db, "weather_cache", "uvIndex", "REAL NOT NULL DEFAULT 0.0")
+            addColumnIfMissing(db, "weather_cache", "visibilityMeters", "REAL NOT NULL DEFAULT 0.0")
+            addColumnIfMissing(db, "weather_cache", "precipitationMm", "REAL NOT NULL DEFAULT 0.0")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS calendar_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    uuid TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    startMillis INTEGER NOT NULL,
+                    endMillis INTEGER NOT NULL,
+                    location TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    isAllDay INTEGER NOT NULL,
+                    createdAtMillis INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+        }
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE weather_cache ADD COLUMN apiTimezone TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE weather_cache ADD COLUMN windDirectionDeg INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE weather_cache ADD COLUMN pressureHpa REAL NOT NULL DEFAULT 0.0")
-                db.execSQL("ALTER TABLE weather_cache ADD COLUMN uvIndex REAL NOT NULL DEFAULT 0.0")
-                db.execSQL("ALTER TABLE weather_cache ADD COLUMN visibilityMeters REAL NOT NULL DEFAULT 0.0")
-                db.execSQL("ALTER TABLE weather_cache ADD COLUMN precipitationMm REAL NOT NULL DEFAULT 0.0")
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS calendar_events (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        uuid TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        description TEXT NOT NULL,
-                        startMillis INTEGER NOT NULL,
-                        endMillis INTEGER NOT NULL,
-                        location TEXT NOT NULL,
-                        category TEXT NOT NULL,
-                        isAllDay INTEGER NOT NULL,
-                        createdAtMillis INTEGER NOT NULL
-                    )
-                    """.trimIndent(),
-                )
+                ensureV2AndV3SchemaElements(db)
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                ensureV2AndV3SchemaElements(db)
             }
         }
 
@@ -88,23 +118,25 @@ abstract class RRDatabase : RoomDatabase() {
         }
 
         private fun buildDatabase(context: Context): RRDatabase {
-            lateinit var db: RRDatabase
-            db = Room.databaseBuilder(
+            lateinit var roomDb: RRDatabase
+            roomDb = Room.databaseBuilder(
                 context,
                 RRDatabase::class.java,
                 "rr_reminder.db",
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
                 .addCallback(object : Callback() {
-                    override fun onCreate(sqlDb: SupportSQLiteDatabase) {
-                        super.onCreate(sqlDb)
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        super.onCreate(db)
                         CoroutineScope(Dispatchers.IO).launch {
-                            seedDefaults(db)
+                            runCatching { seedDefaults(roomDb) }
                         }
                     }
                 })
                 .build()
-            return db
+            return roomDb
         }
 
         private suspend fun seedDefaults(db: RRDatabase) {
@@ -119,13 +151,15 @@ abstract class RRDatabase : RoomDatabase() {
             presets.forEach { timerDao.insertPreset(it) }
 
             val clockDao = db.worldClockDao()
-            val defaultCities = listOf(
-                WorldClockCityEntity(cityName = "New Delhi", countryName = "India", zoneId = "Asia/Kolkata", sortOrder = 0),
-                WorldClockCityEntity(cityName = "London", countryName = "United Kingdom", zoneId = "Europe/London", sortOrder = 1),
-                WorldClockCityEntity(cityName = "New York", countryName = "United States", zoneId = "America/New_York", sortOrder = 2),
-                WorldClockCityEntity(cityName = "Tokyo", countryName = "Japan", zoneId = "Asia/Tokyo", sortOrder = 3),
-            )
-            defaultCities.forEach { clockDao.insertCity(it) }
+            if (clockDao.getAllSync().isEmpty()) {
+                val defaultCities = listOf(
+                    WorldClockCityEntity(cityName = "New Delhi", countryName = "India", zoneId = "Asia/Kolkata", sortOrder = 0),
+                    WorldClockCityEntity(cityName = "London", countryName = "United Kingdom", zoneId = "Europe/London", sortOrder = 1),
+                    WorldClockCityEntity(cityName = "New York", countryName = "United States", zoneId = "America/New_York", sortOrder = 2),
+                    WorldClockCityEntity(cityName = "Tokyo", countryName = "Japan", zoneId = "Asia/Tokyo", sortOrder = 3),
+                )
+                defaultCities.forEach { clockDao.insertCity(it) }
+            }
         }
     }
 }

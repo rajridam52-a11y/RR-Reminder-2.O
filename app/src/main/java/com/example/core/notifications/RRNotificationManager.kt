@@ -88,7 +88,7 @@ class RRNotificationManager(
                 description = context.getString(R.string.channel_system_desc)
             },
         )
-        channels.forEach { manager.createNotificationChannel(it) }
+        channels.forEach { ch -> runCatching { manager.createNotificationChannel(ch) } }
     }
 
     fun hasNotificationPermission(): Boolean {
@@ -152,7 +152,7 @@ class RRNotificationManager(
         )
 
         val builder = NotificationCompat.Builder(context, RRChannels.REMINDERS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_rr_notification)
             .setContentTitle(displayTitle)
             .setContentText(displayBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
@@ -171,7 +171,7 @@ class RRNotificationManager(
         }
 
         val notifId = if (isLeadAlert) (15_000 + reminderId).toInt() else (1000 + reminderId).toInt()
-        NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        runCatching { NotificationManagerCompat.from(context).notify(notifId, builder.build()) }
     }
 
     fun buildAlarmRingingNotification(
@@ -208,7 +208,7 @@ class RRNotificationManager(
 
         val channel = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS
         val builder = NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_rr_notification)
             .setContentTitle(if (isTimer) "Timer Finished" else "Alarm: $label")
             .setContentText(if (isTimer) "$label countdown completed" else "Tap to manage alarm")
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -258,7 +258,7 @@ class RRNotificationManager(
         )
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_rr_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -266,11 +266,11 @@ class RRNotificationManager(
             .setContentIntent(openIntent)
             .build()
 
-        NotificationManagerCompat.from(context).notify(id, notification)
+        runCatching { NotificationManagerCompat.from(context).notify(id, notification) }
     }
 
     fun cancelNotification(id: Int) {
-        NotificationManagerCompat.from(context).cancel(id)
+        runCatching { NotificationManagerCompat.from(context).cancel(id) }
     }
 
     fun logNotification(
@@ -281,15 +281,17 @@ class RRNotificationManager(
         sourceId: Long,
     ) {
         CoroutineScope(Dispatchers.IO).launch {
-            notificationLogDao.insertLog(
-                NotificationLogEntity(
-                    channelId = channelId,
-                    title = title,
-                    body = body,
-                    sourceType = sourceType,
-                    sourceId = sourceId,
-                ),
-            )
+            runCatching {
+                notificationLogDao.insertLog(
+                    NotificationLogEntity(
+                        channelId = channelId,
+                        title = title,
+                        body = body,
+                        sourceType = sourceType,
+                        sourceId = sourceId,
+                    ),
+                )
+            }
         }
     }
 }

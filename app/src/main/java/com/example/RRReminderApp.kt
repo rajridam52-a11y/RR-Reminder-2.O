@@ -2,6 +2,7 @@ package com.example
 
 import android.app.Application
 import com.example.core.di.AppContainer
+import com.google.firebase.FirebaseApp
 
 class RRReminderApp : Application() {
     lateinit var container: AppContainer
@@ -9,7 +10,14 @@ class RRReminderApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        runCatching {
+            if (FirebaseApp.getApps(this).isEmpty()) {
+                FirebaseApp.initializeApp(this)
+            }
+        }
         container = AppContainer(this)
-        container.notificationManager.ensureChannels()
+        runCatching {
+            container.notificationManager.ensureChannels()
+        }
     }
 }

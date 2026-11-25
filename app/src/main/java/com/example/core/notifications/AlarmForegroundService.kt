@@ -36,49 +36,60 @@ class AlarmForegroundService : Service() {
         if (intent?.action == ACTION_STOP) {
             autoStopJob?.cancel()
             stopAudioAndVibration()
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             stopSelf()
             return START_NOT_STICKY
         }
 
-        val id = intent?.getLongExtra(EXTRA_ID, 0L) ?: 0L
-        val label = intent?.getStringExtra(EXTRA_LABEL) ?: "Alarm"
-        val isTimer = intent?.getBooleanExtra(EXTRA_IS_TIMER, false) ?: false
-        val vibrate = intent?.getBooleanExtra(EXTRA_VIBRATE, true) ?: true
-        val gradualVolume = intent?.getBooleanExtra(EXTRA_GRADUAL_VOLUME, true) ?: true
-        val ringtoneUriString = intent?.getStringExtra(EXTRA_RINGTONE_URI)
-        val snoozeMinutes = intent?.getIntExtra(EXTRA_SNOOZE_MINUTES, 10) ?: 10
+        val id = runCatching { intent?.getLongExtra(EXTRA_ID, 0L) ?: 0L }.getOrDefault(0L)
+        val label = runCatching { intent?.getStringExtra(EXTRA_LABEL) ?: "Alarm" }.getOrDefault("Alarm")
+        val isTimer = runCatching { intent?.getBooleanExtra(EXTRA_IS_TIMER, false) ?: false }.getOrDefault(false)
+        val vibrate = runCatching { intent?.getBooleanExtra(EXTRA_VIBRATE, true) ?: true }.getOrDefault(true)
+        val gradualVolume = runCatching { intent?.getBooleanExtra(EXTRA_GRADUAL_VOLUME, true) ?: true }.getOrDefault(true)
+        val ringtoneUriString = runCatching { intent?.getStringExtra(EXTRA_RINGTONE_URI) }.getOrNull()
+        val snoozeMinutes = runCatching { intent?.getIntExtra(EXTRA_SNOOZE_MINUTES, 10) ?: 10 }.getOrDefault(10)
 
-        val db = RRDatabase.getInstance(applicationContext)
-        val notifManager = RRNotificationManager(applicationContext, db.notificationLogDao())
-        val notification = notifManager.buildAlarmRingingNotification(
-            alarmId = id,
-            label = label,
-            isTimer = isTimer,
-            snoozeMinutes = snoozeMinutes,
-        )
+        val notifSetup = runCatching {
+            val db = RRDatabase.getInstance(applicationContext)
+            val notifManager = RRNotificationManager(applicationContext, db.notificationLogDao())
+            val notification = notifManager.buildAlarmRingingNotification(
+                alarmId = id,
+                label = label,
+                isTimer = isTimer,
+                snoozeMinutes = snoozeMinutes,
+            )
+            notifManager to notification
+        }.getOrElse {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val (notifManager, notification) = notifSetup
 
         runCatching { startForeground(FOREGROUND_NOTIFICATION_ID, notification) }
             .onFailure {
                 // If foreground promotion fails on restricted OEM states, post alert and stop safely.
-                notifManager.postSimpleNotification(
-                    id = FOREGROUND_NOTIFICATION_ID,
-                    channelId = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS,
-                    title = if (isTimer) "Timer Finished: $label" else "Alarm: $label",
-                    body = if (isTimer) "Countdown completed" else "Alarm triggered",
-                    sourceType = if (isTimer) "TIMER" else "ALARM",
-                    sourceId = id,
-                )
+                runCatching {
+                    notifManager.postSimpleNotification(
+                        id = FOREGROUND_NOTIFICATION_ID,
+                        channelId = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS,
+                        title = if (isTimer) "Timer Finished: $label" else "Alarm: $label",
+                        body = if (isTimer) "Countdown completed" else "Alarm triggered",
+                        sourceType = if (isTimer) "TIMER" else "ALARM",
+                        sourceId = id,
+                    )
+                }
                 stopSelf()
                 return START_NOT_STICKY
             }
-        notifManager.logNotification(
-            channelId = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS,
-            title = if (isTimer) "Timer Finished: $label" else "Alarm: $label",
-            body = if (isTimer) "Countdown completed" else "Alarm ringing",
-            sourceType = if (isTimer) "TIMER" else "ALARM",
-            sourceId = id,
-        )
+        runCatching {
+            notifManager.logNotification(
+                channelId = if (isTimer) RRChannels.TIMERS else RRChannels.ALARMS,
+                title = if (isTimer) "Timer Finished: $label" else "Alarm: $label",
+                body = if (isTimer) "Countdown completed" else "Alarm ringing",
+                sourceType = if (isTimer) "TIMER" else "ALARM",
+                sourceId = id,
+            )
+        }
 
         startAudio(ringtoneUriString, gradualVolume)
         if (vibrate) startVibration()
@@ -88,7 +99,7 @@ class AlarmForegroundService : Service() {
         autoStopJob = serviceScope.launch {
             delay(10 * 60_000L)
             stopAudioAndVibration()
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             stopSelf()
         }
 

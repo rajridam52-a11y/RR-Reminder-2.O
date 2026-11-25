@@ -5,6 +5,7 @@ import com.example.core.database.BackupCalendarEvent
 import com.example.core.database.BackupHabit
 import com.example.core.database.BackupPayload
 import com.example.core.database.BackupReminder
+import com.example.core.database.RRDatabase
 import com.example.core.database.ReminderEntity
 import com.example.core.database.RepeatType
 import com.example.core.datastore.ClockFaceStyle
@@ -15,6 +16,7 @@ import com.example.core.datastore.TimeFormatMode
 import com.example.core.datastore.UserPreferences
 import com.example.core.firebase.GlobalAppConfig
 import com.example.core.firebase.OWNER_ADMIN_EMAIL
+import com.example.core.firebase.OwnerConfigRepository
 import com.example.core.firebase.isOwnerUser
 import com.example.core.firebase.resolveEffectivePreferences
 import com.example.core.health.HealthScoreCalculator
@@ -22,6 +24,8 @@ import com.example.core.health.HealthStatus
 import com.example.core.health.SystemCheckId
 import com.example.core.health.SystemHealthItem
 import com.example.core.network.HourlyForecastItem
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import com.example.core.network.NetworkModule
 import com.example.core.network.NetworkTimeProvider
 import com.example.core.network.OwnerTimeOverride
@@ -560,5 +564,18 @@ class RRReminderUnitTests {
         assertEquals("Weekdays", ScheduleCalculator.formatWeekdaysMask(0b0011111))
         assertEquals("Weekends", ScheduleCalculator.formatWeekdaysMask(0b1100000))
         assertEquals("Mon, Wed", ScheduleCalculator.formatWeekdaysMask((1 shl 0) or (1 shl 2)))
+    }
+
+    @Test
+    fun `database migrations cover v1 to v3 cleanly and owner config falls back safely when firebase unavailable`() = runBlocking {
+        assertEquals(1, RRDatabase.MIGRATION_1_2.startVersion)
+        assertEquals(2, RRDatabase.MIGRATION_1_2.endVersion)
+        assertEquals(2, RRDatabase.MIGRATION_2_3.startVersion)
+        assertEquals(3, RRDatabase.MIGRATION_2_3.endVersion)
+
+        val repo = OwnerConfigRepository(db = null, authOverride = null)
+        val initialResult = repo.observeGlobalConfig().first()
+        assertTrue(initialResult.isSuccess)
+        assertNull(initialResult.getOrNull())
     }
 }

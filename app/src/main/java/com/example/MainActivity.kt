@@ -19,11 +19,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        configureAppCheck(this, intent)
-        enableEdgeToEdge()
-        widgetDestination = intent?.getStringExtra("navigate_to")
+        runCatching { configureAppCheck(this, intent) }
+        runCatching { enableEdgeToEdge() }
+        widgetDestination = runCatching { intent?.getStringExtra("navigate_to") }.getOrNull()
 
-        val container = (application as RRReminderApp).container
+        val container = (application as? RRReminderApp)?.container
+            ?: com.example.core.di.AppContainer(applicationContext)
 
         setContent {
             val prefs by container.effectivePreferences
@@ -43,6 +44,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        widgetDestination = intent.getStringExtra("navigate_to")
+        widgetDestination = runCatching { intent.getStringExtra("navigate_to") }.getOrNull()
     }
 }

@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
@@ -83,8 +84,10 @@ class NextReminderWidgetProvider : AppWidgetProvider() {
                     )
                     manager.updateAppWidget(id, views)
                 }
+            } catch (t: Throwable) {
+                Log.e("RRWidgets", "NextReminderWidgetProvider update failed", t)
             } finally {
-                pending.finish()
+                runCatching { pending.finish() }
             }
         }
     }
@@ -114,8 +117,10 @@ class ClockWidgetProvider : AppWidgetProvider() {
                     )
                     manager.updateAppWidget(id, views)
                 }
+            } catch (t: Throwable) {
+                Log.e("RRWidgets", "ClockWidgetProvider update failed", t)
             } finally {
-                pending.finish()
+                runCatching { pending.finish() }
             }
         }
     }
@@ -151,8 +156,10 @@ class WeatherWidgetProvider : AppWidgetProvider() {
                     )
                     manager.updateAppWidget(id, views)
                 }
+            } catch (t: Throwable) {
+                Log.e("RRWidgets", "WeatherWidgetProvider update failed", t)
             } finally {
-                pending.finish()
+                runCatching { pending.finish() }
             }
         }
     }
@@ -160,13 +167,15 @@ class WeatherWidgetProvider : AppWidgetProvider() {
 
 class QuickAddWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, appWidgetIds: IntArray) {
-        appWidgetIds.forEach { id ->
-            val views = RemoteViews(context.packageName, R.layout.widget_quick_add)
-            views.setOnClickPendingIntent(
-                R.id.widget_quick_add_root,
-                WidgetUpdateHelper.launchMainIntent(context, "quick_add", 504),
-            )
-            manager.updateAppWidget(id, views)
+        runCatching {
+            appWidgetIds.forEach { id ->
+                val views = RemoteViews(context.packageName, R.layout.widget_quick_add)
+                views.setOnClickPendingIntent(
+                    R.id.widget_quick_add_root,
+                    WidgetUpdateHelper.launchMainIntent(context, "quick_add", 504),
+                )
+                manager.updateAppWidget(id, views)
+            }
         }
     }
 }
@@ -202,8 +211,10 @@ class TimerWidgetProvider : AppWidgetProvider() {
                     )
                     manager.updateAppWidget(id, views)
                 }
+            } catch (t: Throwable) {
+                Log.e("RRWidgets", "TimerWidgetProvider update failed", t)
             } finally {
-                pending.finish()
+                runCatching { pending.finish() }
             }
         }
     }

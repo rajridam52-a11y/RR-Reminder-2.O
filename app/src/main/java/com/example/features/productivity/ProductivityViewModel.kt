@@ -69,30 +69,32 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            val prefs = container.preferencesRepository.getSnapshot()
-            val now = System.currentTimeMillis()
-            if (prefs.focusRunning && prefs.focusEndEpochMs > now) {
-                _focusState.value = FocusUiState(
-                    isRunning = true,
-                    phase = prefs.focusPhase,
-                    label = prefs.focusLabel,
-                    focusMinutes = prefs.focusMinutes,
-                    breakMinutes = prefs.breakMinutes,
-                    remainingMs = prefs.focusEndEpochMs - now,
-                    endEpochMs = prefs.focusEndEpochMs,
-                )
-            } else if (prefs.focusRunning && prefs.focusEndEpochMs in 1L..now) {
-                completeFocusPhase(prefs.focusPhase, prefs.focusLabel, prefs.focusMinutes, prefs.breakMinutes)
-            } else {
-                _focusState.value = FocusUiState(
-                    isRunning = false,
-                    phase = prefs.focusPhase,
-                    label = prefs.focusLabel,
-                    focusMinutes = prefs.focusMinutes,
-                    breakMinutes = prefs.breakMinutes,
-                    remainingMs = prefs.focusRemainingMs,
-                    endEpochMs = 0L,
-                )
+            runCatching {
+                val prefs = container.preferencesRepository.getSnapshot()
+                val now = System.currentTimeMillis()
+                if (prefs.focusRunning && prefs.focusEndEpochMs > now) {
+                    _focusState.value = FocusUiState(
+                        isRunning = true,
+                        phase = prefs.focusPhase,
+                        label = prefs.focusLabel,
+                        focusMinutes = prefs.focusMinutes,
+                        breakMinutes = prefs.breakMinutes,
+                        remainingMs = prefs.focusEndEpochMs - now,
+                        endEpochMs = prefs.focusEndEpochMs,
+                    )
+                } else if (prefs.focusRunning && prefs.focusEndEpochMs in 1L..now) {
+                    completeFocusPhase(prefs.focusPhase, prefs.focusLabel, prefs.focusMinutes, prefs.breakMinutes)
+                } else {
+                    _focusState.value = FocusUiState(
+                        isRunning = false,
+                        phase = prefs.focusPhase,
+                        label = prefs.focusLabel,
+                        focusMinutes = prefs.focusMinutes,
+                        breakMinutes = prefs.breakMinutes,
+                        remainingMs = prefs.focusRemainingMs,
+                        endEpochMs = 0L,
+                    )
+                }
             }
         }
 
@@ -103,7 +105,9 @@ class ProductivityViewModel(private val container: AppContainer) : ViewModel() {
                 if (cur.isRunning && cur.endEpochMs > 0L) {
                     val rem = (cur.endEpochMs - System.currentTimeMillis()).coerceAtLeast(0L)
                     if (rem == 0L) {
-                        completeFocusPhase(cur.phase, cur.label, cur.focusMinutes, cur.breakMinutes)
+                        runCatching {
+                            completeFocusPhase(cur.phase, cur.label, cur.focusMinutes, cur.breakMinutes)
+                        }
                     } else {
                         _focusState.value = cur.copy(remainingMs = rem)
                     }

@@ -19,17 +19,22 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 
 class OwnerConfigRepository(
-    private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth,
+    private val db: FirebaseFirestore?,
+    private val authOverride: FirebaseAuth? = null,
 ) {
     constructor(context: Context) : this(
-        db = FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id),
-        ),
+        db = runCatching {
+            FirebaseFirestore.getInstance(
+                context.applicationContext.getString(R.string.firestore_database_id),
+            )
+        }.getOrNull(),
     )
 
+    private fun resolveAuth(): FirebaseAuth? =
+        authOverride ?: runCatching { Firebase.auth }.getOrNull()
+
     private fun requireSignedInUser() =
-        auth.currentUser ?: throw IllegalStateException("Please sign in with Google first.")
+        resolveAuth()?.currentUser ?: throw IllegalStateException("Please sign in with Google first.")
 
     private fun requireVerifiedOwner() {
         val user = requireSignedInUser()
@@ -39,12 +44,14 @@ class OwnerConfigRepository(
     }
 
     fun observeGlobalConfig(): Flow<Result<GlobalAppConfig?>> = flow {
-        val uid = auth.currentUser?.uid
-        if (uid.isNullOrBlank()) {
+        val auth = resolveAuth()
+        val firestore = db
+        val uid = auth?.currentUser?.uid
+        if (uid.isNullOrBlank() || firestore == null) {
             emit(Result.success(null))
             return@flow
         }
-        val docRef = db.collection(APP_CONFIG_COLLECTION).document(GLOBAL_CONFIG_DOC_ID)
+        val docRef = firestore.collection(APP_CONFIG_COLLECTION).document(GLOBAL_CONFIG_DOC_ID)
         emitAll(
             docRef.snapshots()
                 .map { snapshot ->
@@ -75,8 +82,9 @@ class OwnerConfigRepository(
     suspend fun saveGlobalConfig(config: GlobalAppConfig): Result<Unit> {
         return try {
             requireVerifiedOwner()
+            val firestore = db ?: throw IllegalStateException("Firebase Firestore is unavailable.")
             val sanitized = config.validatedForSave()
-            val docRef = db.collection(APP_CONFIG_COLLECTION).document(GLOBAL_CONFIG_DOC_ID)
+            val docRef = firestore.collection(APP_CONFIG_COLLECTION).document(GLOBAL_CONFIG_DOC_ID)
             val existingSnap = docRef.get().await()
             if (existingSnap.exists()) {
                 docRef.update(sanitized.toMutableFieldMap(FieldValue.serverTimestamp())).await()

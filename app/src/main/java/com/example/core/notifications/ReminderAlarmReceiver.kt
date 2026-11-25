@@ -3,6 +3,7 @@ package com.example.core.notifications
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.RRReminderApp
 import com.example.core.database.AlarmHistoryEntity
@@ -246,8 +247,10 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                 }
 
                 WidgetUpdateHelper.updateAllWidgets(appContext)
+            } catch (t: Throwable) {
+                Log.e("ReminderAlarmReceiver", "Failed handling action=$action", t)
             } finally {
-                pendingResult.finish()
+                runCatching { pendingResult.finish() }
             }
         }
     }

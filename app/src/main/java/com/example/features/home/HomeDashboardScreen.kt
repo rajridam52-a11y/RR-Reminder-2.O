@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.EventNote
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -642,7 +643,7 @@ fun HomeDashboardScreen(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        Icons.Rounded.EventNote,
+                                        Icons.AutoMirrored.Rounded.EventNote,
                                         contentDescription = null,
                                         tint = Color(0xFF6366F1),
                                         modifier = Modifier.size(22.dp),

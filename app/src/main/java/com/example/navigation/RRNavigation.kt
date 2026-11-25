@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.EventNote
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -115,7 +116,7 @@ enum class TopNavTab(
 ) {
     HOME(RRRoutes.HOME, "Home", Icons.Rounded.Home, "nav_home"),
     CLOCK(RRRoutes.CLOCK_HUB, "Clock", Icons.Rounded.AccessTimeFilled, "nav_clock"),
-    REMINDERS(RRRoutes.REMINDERS, "Reminders", Icons.Rounded.EventNote, "nav_reminders"),
+    REMINDERS(RRRoutes.REMINDERS, "Reminders", Icons.AutoMirrored.Rounded.EventNote, "nav_reminders"),
     HEALTH(RRRoutes.SYSTEM_HEALTH, "Health", Icons.Rounded.VerifiedUser, "nav_health"),
     SETTINGS(RRRoutes.SETTINGS, "Settings", Icons.Rounded.Settings, "nav_settings"),
 }
@@ -127,17 +128,22 @@ fun RRAppRoot(
 ) {
     var splashDone by rememberSaveable { mutableStateOf(false) }
     var welcomeDismissed by rememberSaveable { mutableStateOf(false) }
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    val firebaseAuth = remember { runCatching { Firebase.auth }.getOrNull() }
+    var currentUser by remember { mutableStateOf(firebaseAuth?.currentUser) }
 
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            currentUser = auth.currentUser
-            if (auth.currentUser == null) {
-                container.clearRemoteOverrides()
+    DisposableEffect(firebaseAuth) {
+        if (firebaseAuth != null) {
+            val listener = FirebaseAuth.AuthStateListener { auth ->
+                currentUser = auth.currentUser
+                if (auth.currentUser == null) {
+                    container.clearRemoteOverrides()
+                }
             }
+            firebaseAuth.addAuthStateListener(listener)
+            onDispose { runCatching { firebaseAuth.removeAuthStateListener(listener) } }
+        } else {
+            onDispose { }
         }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose { Firebase.auth.removeAuthStateListener(listener) }
     }
 
     LaunchedEffect(Unit) {
@@ -159,7 +165,7 @@ fun RRAppRoot(
         val preAuthNowMillis by container.sharedNowMillis.collectAsStateWithLifecycle()
 
         LaunchedEffect(Unit) {
-            container.syncClockAndEmit()
+            runCatching { container.syncClockAndEmit() }
         }
 
         WelcomePreviewScreen(
@@ -176,7 +182,7 @@ fun RRAppRoot(
     if (signedInUser == null) {
         AuthScreen(
             onAuthSuccess = {
-                currentUser = Firebase.auth.currentUser
+                currentUser = runCatching { Firebase.auth.currentUser }.getOrNull()
             },
         )
         return
@@ -217,7 +223,7 @@ private fun RRMainShell(
     initialDestination: String?,
 ) {
     val context = LocalContext.current
-    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val credentialManager = remember(context) { runCatching { CredentialManager.create(context) }.getOrNull() }
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()

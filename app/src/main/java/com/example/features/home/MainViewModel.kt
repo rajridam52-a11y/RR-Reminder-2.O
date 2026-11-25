@@ -245,17 +245,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            container.syncClockAndEmit()
+            runCatching { container.syncClockAndEmit() }
         }
         viewModelScope.launch {
-            container.ownerConfigRepository.observeGlobalConfig().collect { res ->
-                res.onSuccess { cfg ->
-                    container.applyRemoteGlobalConfig(cfg)
+            container.ownerConfigRepository.observeGlobalConfig()
+                .catch { /* Keep local preferences when remote listener errors */ }
+                .collect { res ->
+                    res.onSuccess { cfg ->
+                        runCatching { container.applyRemoteGlobalConfig(cfg) }
+                    }
                 }
-            }
         }
         viewModelScope.launch {
-            container.systemHealthChecker.runQuickStartupChecksIfNeeded()
+            runCatching { container.systemHealthChecker.runQuickStartupChecksIfNeeded() }
         }
     }
 

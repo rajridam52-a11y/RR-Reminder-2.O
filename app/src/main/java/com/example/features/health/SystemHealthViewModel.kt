@@ -26,7 +26,7 @@ class SystemHealthViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            container.systemHealthChecker.runQuickStartupChecksIfNeeded()
+            runCatching { container.systemHealthChecker.runQuickStartupChecksIfNeeded() }
         }
     }
 

@@ -1,5 +1,6 @@
 package com.example.features.alarms
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.media.RingtoneManager
@@ -32,10 +33,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.database.AlarmEntity
 import com.example.core.database.AlarmHistoryEntity
 import com.example.core.datastore.UserPreferences
 import com.example.core.network.NetworkTimeSyncStatus
+import com.example.core.notifications.AlarmForegroundService
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
 import com.example.ui.components.RRCard
@@ -46,6 +51,7 @@ import com.example.ui.components.RRStatusPill
 import com.example.ui.theme.LocalRRExtraColors
 import com.example.ui.theme.TabularClockLarge
 import com.example.ui.theme.TabularClockMedium
+import java.time.Instant
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,13 +69,35 @@ fun AlarmsTabContent(
     onClearHistory: () -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val extra = LocalRRExtraColors.current
     var showHistory by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
     var editingAlarm by remember { mutableStateOf<AlarmEntity?>(null) }
     var deleteCandidate by remember { mutableStateOf<AlarmEntity?>(null) }
 
-    val exactAlarmAllowed = PermissionHelper.canScheduleExactAlarms(context)
+    var exactAlarmAllowed by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+    var notifAllowed by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
+    var fullScreenAllowed by remember { mutableStateOf(PermissionHelper.canUseFullScreenIntent(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exactAlarmAllowed = PermissionHelper.canScheduleExactAlarms(context)
+                notifAllowed = PermissionHelper.hasNotificationPermission(context)
+                fullScreenAllowed = PermissionHelper.canUseFullScreenIntent(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notifAllowed = granted || PermissionHelper.hasNotificationPermission(context)
+    }
+
     val nextAlarm = alarms.filter { it.isEnabled && it.nextTriggerAtMillis != null }
         .minByOrNull { it.nextTriggerAtMillis ?: Long.MAX_VALUE }
 
@@ -147,6 +175,35 @@ fun AlarmsTabContent(
                     }
                 }
 
+                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0x33D97706),
+                            border = BorderStroke(1.dp, Color(0x77FBBF24)),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(Icons.Rounded.NotificationsOff, contentDescription = null, tint = Color(0xFFFBBF24))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Notification Permission Needed", style = MaterialTheme.typography.titleSmall, color = Color.White)
+                                    Text(
+                                        "Allow notifications so ringing alarm controls appear.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFD6E3FF),
+                                    )
+                                }
+                                TextButton(onClick = { notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                                    Text("Allow", color = Color(0xFF38BDF8))
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (!exactAlarmAllowed) {
                     item {
                         Surface(
@@ -163,13 +220,42 @@ fun AlarmsTabContent(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("Exact Alarm Permission Disabled", style = MaterialTheme.typography.titleSmall, color = Color.White)
                                     Text(
-                                        "Grant exact alarm permission so alarms fire reliably.",
+                                        "Grant exact alarm permission so alarms fire on time.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFFD6E3FF),
                                     )
                                 }
                                 TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
                                     Text("Enable", color = Color(0xFF38BDF8))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!fullScreenAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0x332563EB),
+                            border = BorderStroke(1.dp, Color(0x7760A5FA)),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(Icons.Rounded.Fullscreen, contentDescription = null, tint = Color(0xFF60A5FA))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Full-Screen Alarm Display", style = MaterialTheme.typography.titleSmall, color = Color.White)
+                                    Text(
+                                        "Allow full-screen alerts to wake over the lock screen.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFD6E3FF),
+                                    )
+                                }
+                                TextButton(onClick = { PermissionHelper.openFullScreenIntentSettings(context) }) {
+                                    Text("Allow", color = Color(0xFF38BDF8))
                                 }
                             }
                         }
@@ -257,7 +343,12 @@ fun AlarmsTabContent(
                                     Column(horizontalAlignment = Alignment.End) {
                                         Switch(
                                             checked = alarm.isEnabled,
-                                            onCheckedChange = { onToggleAlarm(alarm, it) },
+                                            onCheckedChange = { enable ->
+                                                if (enable && !notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                                }
+                                                onToggleAlarm(alarm, enable)
+                                            },
                                             modifier = Modifier.testTag("alarm_toggle_${alarm.id}"),
                                         )
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -399,10 +490,14 @@ fun AlarmsTabContent(
     if (showEditor) {
         AlarmEditorDialog(
             initial = editingAlarm,
+            nowMillis = nowMillis,
             preferences = preferences,
             onDismiss = { showEditor = false },
-            onSave = {
-                onSaveAlarm(it)
+            onSave = { saved ->
+                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                onSaveAlarm(saved)
                 showEditor = false
             },
         )
@@ -427,19 +522,20 @@ fun AlarmsTabContent(
 @Composable
 private fun AlarmEditorDialog(
     initial: AlarmEntity?,
+    nowMillis: Long,
     preferences: UserPreferences,
     onDismiss: () -> Unit,
     onSave: (AlarmEntity) -> Unit,
 ) {
     val context = LocalContext.current
-    val nowCal = remember {
-        java.util.Calendar.getInstance().apply {
-            if (initial == null) add(java.util.Calendar.MINUTE, 5)
-        }
+    val initialZdt = remember(initial?.id, preferences.primaryClockZone) {
+        Instant.ofEpochMilli(nowMillis)
+            .atZone(preferences.primaryClockZone.toZoneId())
+            .plusMinutes(5)
     }
     val timeState = rememberTimePickerState(
-        initialHour = initial?.hour ?: nowCal.get(java.util.Calendar.HOUR_OF_DAY),
-        initialMinute = initial?.minute ?: nowCal.get(java.util.Calendar.MINUTE),
+        initialHour = initial?.hour ?: initialZdt.hour,
+        initialMinute = initial?.minute ?: initialZdt.minute,
         is24Hour = preferences.use24Hour,
     )
     var useKeyboardInput by remember { mutableStateOf(false) }
@@ -449,7 +545,14 @@ private fun AlarmEditorDialog(
     var gradualVolume by remember { mutableStateOf(initial?.gradualVolume ?: true) }
     var snoozeMinutes by remember { mutableIntStateOf(initial?.snoozeMinutes ?: preferences.defaultAlarmSnoozeMinutes) }
     var ringtoneUri by remember { mutableStateOf(initial?.ringtoneUri) }
-    var ringtoneTitle by remember { mutableStateOf(initial?.ringtoneTitle ?: "Default Alarm") }
+    var ringtoneTitle by remember {
+        mutableStateOf(
+            when {
+                initial?.ringtoneUri == AlarmForegroundService.SILENT_RINGTONE_URI -> "Silent"
+                else -> initial?.ringtoneTitle ?: "Default Alarm"
+            },
+        )
+    }
 
     val ringtoneLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -461,7 +564,7 @@ private fun AlarmEditorDialog(
                 @Suppress("DEPRECATION")
                 res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
             }
-            ringtoneUri = uri?.toString()
+            ringtoneUri = uri?.toString() ?: AlarmForegroundService.SILENT_RINGTONE_URI
             ringtoneTitle = if (uri != null) {
                 runCatching { RingtoneManager.getRingtone(context, uri).getTitle(context) }.getOrDefault("Custom Tone")
             } else {
@@ -570,7 +673,7 @@ private fun AlarmEditorDialog(
                                 putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Alarm Sound")
                                 putExtra(
                                     RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                                    ringtoneUri?.let { Uri.parse(it) },
+                                    ringtoneUri?.takeIf { it.isNotBlank() && it != AlarmForegroundService.SILENT_RINGTONE_URI }?.let { Uri.parse(it) },
                                 )
                             }
                             runCatching { ringtoneLauncher.launch(intent) }

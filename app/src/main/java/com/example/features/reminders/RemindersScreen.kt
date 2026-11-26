@@ -1,7 +1,9 @@
 package com.example.features.reminders
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.os.Build
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -33,6 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.common.VoiceReminderParser
 import com.example.core.database.ReminderEntity
 import com.example.core.database.ReminderPriority
@@ -74,11 +79,33 @@ fun RemindersScreen(
     onClearCapturedLocation: () -> Unit,
     onNavigateNotifications: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val extra = LocalRRExtraColors.current
     var editingReminder by remember { mutableStateOf<ReminderEntity?>(null) }
     var showEditor by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<ReminderEntity?>(null) }
     var showSearchBar by remember { mutableStateOf(searchQuery.isNotBlank()) }
+
+    var notifAllowed by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
+    var exactAlarmAllowed by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notifAllowed = PermissionHelper.hasNotificationPermission(context)
+                exactAlarmAllowed = PermissionHelper.canScheduleExactAlarms(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notifAllowed = granted || PermissionHelper.hasNotificationPermission(context)
+    }
 
     val primaryZone = remember(preferences.primaryClockZone) { preferences.primaryClockZone.toZoneId() }
     val todayDate = remember(nowMillis, primaryZone) { Instant.ofEpochMilli(nowMillis).atZone(primaryZone).toLocalDate() }
@@ -247,6 +274,60 @@ fun RemindersScreen(
                 }
             }
 
+            if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0x33D97706),
+                    border = BorderStroke(1.dp, Color(0x77FBBF24)),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(Icons.Rounded.NotificationsOff, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "Notifications disabled — alerts will not pop up.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                            Text("Allow")
+                        }
+                    }
+                }
+            } else if (!exactAlarmAllowed) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0x33E11D48),
+                    border = BorderStroke(1.dp, Color(0x77FB7185)),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(Icons.Rounded.AlarmOff, contentDescription = null, tint = Color(0xFFFB7185), modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "Exact alarm permission off — reminder alerts may be delayed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
+                            Text("Enable")
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             if (reminders.isEmpty()) {
@@ -349,6 +430,9 @@ fun RemindersScreen(
             onCaptureLocation = onCaptureLocation,
             onDismiss = { showEditor = false },
             onSave = { saved ->
+                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
                 onSaveReminder(saved)
                 showEditor = false
             },

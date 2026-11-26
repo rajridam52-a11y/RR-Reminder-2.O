@@ -39,6 +39,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -58,6 +62,17 @@ import com.example.ui.theme.TabularClockLarge
 import java.time.ZoneId
 
 class AlarmRingActivity : ComponentActivity() {
+    private var itemIdState by mutableLongStateOf(0L)
+    private var labelState by mutableStateOf("Alarm")
+    private var isTimerState by mutableStateOf(false)
+    private var snoozeMinutesState by mutableIntStateOf(10)
+
+    private fun applyIntent(source: Intent?) {
+        itemIdState = source?.getLongExtra(EXTRA_ID, 0L) ?: 0L
+        labelState = source?.getStringExtra(EXTRA_LABEL) ?: "Alarm"
+        isTimerState = source?.getBooleanExtra(EXTRA_IS_TIMER, false) ?: false
+        snoozeMinutesState = source?.getIntExtra(EXTRA_SNOOZE_MINUTES, 10) ?: 10
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,10 +89,7 @@ class AlarmRingActivity : ComponentActivity() {
             )
         }
 
-        val itemId = intent.getLongExtra(EXTRA_ID, 0L)
-        val label = intent.getStringExtra(EXTRA_LABEL) ?: "Alarm"
-        val isTimer = intent.getBooleanExtra(EXTRA_IS_TIMER, false)
-        val snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE_MINUTES, 10)
+        applyIntent(intent)
         val container = (application as RRReminderApp).container
 
         setContent {
@@ -88,31 +100,33 @@ class AlarmRingActivity : ComponentActivity() {
                 accentPreset = prefs.accentPreset,
             ) {
                 AlarmRingScreen(
-                    label = label,
-                    isTimer = isTimer,
-                    snoozeMinutes = snoozeMinutes,
+                    label = labelState,
+                    isTimer = isTimerState,
+                    snoozeMinutes = snoozeMinutesState,
                     nowMs = nowMs,
                     use24Hour = prefs.use24Hour,
                     zoneId = prefs.primaryClockZone.toZoneId(),
                     onDismiss = {
+                        container.clearActiveAlert()
                         sendBroadcast(
                             Intent(this, ReminderAlarmReceiver::class.java).apply {
-                                action = if (isTimer) {
+                                action = if (isTimerState) {
                                     ReminderAlarmReceiver.ACTION_DISMISS_TIMER
                                 } else {
                                     ReminderAlarmReceiver.ACTION_DISMISS_ALARM
                                 }
-                                putExtra(ReminderAlarmReceiver.EXTRA_ID, itemId)
+                                putExtra(ReminderAlarmReceiver.EXTRA_ID, itemIdState)
                             },
                         )
                         finish()
                     },
                     onSnooze = {
+                        container.clearActiveAlert()
                         sendBroadcast(
                             Intent(this, ReminderAlarmReceiver::class.java).apply {
                                 action = ReminderAlarmReceiver.ACTION_SNOOZE_ALARM
-                                putExtra(ReminderAlarmReceiver.EXTRA_ID, itemId)
-                                putExtra(ReminderAlarmReceiver.EXTRA_SNOOZE_MINUTES, snoozeMinutes)
+                                putExtra(ReminderAlarmReceiver.EXTRA_ID, itemIdState)
+                                putExtra(ReminderAlarmReceiver.EXTRA_SNOOZE_MINUTES, snoozeMinutesState)
                             },
                         )
                         finish()
@@ -120,6 +134,12 @@ class AlarmRingActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyIntent(intent)
     }
 
     companion object {

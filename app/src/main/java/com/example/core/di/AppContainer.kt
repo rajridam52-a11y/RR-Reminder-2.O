@@ -7,6 +7,7 @@ import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.core.ai.AiAssistantRepository
 import com.example.core.calendar.DeviceCalendarReader
+import com.example.core.database.AlarmEntity
 import com.example.core.database.BackupManager
 import com.example.core.database.RRDatabase
 import com.example.core.database.TimerEntity
@@ -24,6 +25,7 @@ import com.example.core.notifications.RRChannels
 import com.example.core.notifications.RRNotificationManager
 import com.example.core.notifications.ReminderAlarmScheduler
 import com.example.data.*
+import com.example.features.alarms.AlarmRingActivity
 import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -40,6 +42,14 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+data class ActiveRingAlert(
+    val id: Long,
+    val label: String,
+    val isTimer: Boolean,
+    val snoozeMinutes: Int,
+    val triggeredAtMillis: Long = System.currentTimeMillis(),
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppContainer(context: Context) {
@@ -63,15 +73,20 @@ class AppContainer(context: Context) {
     val notificationManager: RRNotificationManager by lazy {
         RRNotificationManager(appContext, database.notificationLogDao())
     }
-    val scheduler: ReminderAlarmScheduler by lazy { ReminderAlarmScheduler(appContext) }
+    val networkTimeProvider: NetworkTimeProvider by lazy { NetworkTimeProvider(NetworkModule.httpClient) }
+    val scheduler: ReminderAlarmScheduler by lazy {
+        ReminderAlarmScheduler(appContext, networkTimeProvider)
+    }
     val locationHelper: LocationHelper by lazy { LocationHelper(appContext) }
     val calendarReader: DeviceCalendarReader by lazy { DeviceCalendarReader(appContext) }
     val backupManager: BackupManager by lazy { BackupManager(database) }
     val aiAssistantRepository: AiAssistantRepository by lazy { AiAssistantRepository() }
-    val networkTimeProvider: NetworkTimeProvider by lazy { NetworkTimeProvider(NetworkModule.httpClient) }
 
     private val _sharedNowMillis = MutableStateFlow(networkTimeProvider.currentEpochMillis())
     val sharedNowMillis: StateFlow<Long> = _sharedNowMillis.asStateFlow()
+
+    private val _activeRingAlert = MutableStateFlow<ActiveRingAlert?>(null)
+    val activeRingAlert: StateFlow<ActiveRingAlert?> = _activeRingAlert.asStateFlow()
 
     init {
         // Continuous, non-blocking top-of-second live clock engine across all screens
@@ -80,7 +95,7 @@ class AppContainer(context: Context) {
                 val now = networkTimeProvider.currentEpochMillis()
                 _sharedNowMillis.value = now
                 val remainder = ((now % 1000L) + 1000L) % 1000L
-                val sleepMs = (1000L - remainder).let { if (it < 40L) it + 1000L else it }
+                val sleepMs = (1000L - remainder) + 20L
                 delay(sleepMs)
             }
         }
@@ -116,10 +131,114 @@ class AppContainer(context: Context) {
                     }
                 }
         }
+
+        // In-app alarm watcher (guarantees alarms fire promptly even if OEM battery optimization delays AlarmManager)
+        containerScope.launch {
+            alarmRepository.alarms
+                .catch { err ->
+                    Log.e("AppContainer", "Alarm watcher recovered from DB error", err)
+                }
+                .collectLatest { list ->
+                    val enabled = list.filter { it.isEnabled && it.nextTriggerAtMillis != null }
+                    if (enabled.isEmpty()) return@collectLatest
+                    while (isActive) {
+                        val now = networkTimeProvider.currentEpochMillis()
+                        val due = enabled.filter { (it.nextTriggerAtMillis ?: Long.MAX_VALUE) <= now }
+                        if (due.isNotEmpty()) {
+                            due.forEach { alarm ->
+                                runCatching {
+                                    val consumed = alarmRepository.consumeDueAlarm(
+                                        alarmId = alarm.id,
+                                        nowMillis = now,
+                                        fromReceiver = false,
+                                    )
+                                    if (consumed != null) {
+                                        triggerAlarmAlert(consumed)
+                                    }
+                                }
+                            }
+                            break
+                        }
+                        val nearest = enabled.minOfOrNull { it.nextTriggerAtMillis ?: Long.MAX_VALUE } ?: break
+                        val sleepMs = (nearest - now).coerceIn(250L, 15_000L)
+                        delay(sleepMs)
+                    }
+                }
+        }
+    }
+
+    fun setActiveAlert(id: Long, label: String, isTimer: Boolean, snoozeMinutes: Int) {
+        _activeRingAlert.value = ActiveRingAlert(
+            id = id,
+            label = label,
+            isTimer = isTimer,
+            snoozeMinutes = snoozeMinutes,
+        )
+    }
+
+    fun clearActiveAlert() {
+        _activeRingAlert.value = null
+    }
+
+    fun launchRingActivity(id: Long, label: String, isTimer: Boolean, snoozeMinutes: Int) {
+        runCatching {
+            appContext.startActivity(
+                Intent(appContext, AlarmRingActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    )
+                    putExtra(AlarmRingActivity.EXTRA_ID, id)
+                    putExtra(AlarmRingActivity.EXTRA_LABEL, label)
+                    putExtra(AlarmRingActivity.EXTRA_IS_TIMER, isTimer)
+                    putExtra(AlarmRingActivity.EXTRA_SNOOZE_MINUTES, snoozeMinutes)
+                },
+            )
+        }
+    }
+
+    private suspend fun triggerAlarmAlert(alarm: AlarmEntity) {
+        setActiveAlert(
+            id = alarm.id,
+            label = alarm.label,
+            isTimer = false,
+            snoozeMinutes = alarm.snoozeMinutes,
+        )
+        val serviceIntent = Intent(appContext, AlarmForegroundService::class.java).apply {
+            action = AlarmForegroundService.ACTION_START
+            putExtra(AlarmForegroundService.EXTRA_ID, alarm.id)
+            putExtra(AlarmForegroundService.EXTRA_LABEL, alarm.label)
+            putExtra(AlarmForegroundService.EXTRA_IS_TIMER, false)
+            putExtra(AlarmForegroundService.EXTRA_VIBRATE, alarm.vibrate)
+            putExtra(AlarmForegroundService.EXTRA_GRADUAL_VOLUME, alarm.gradualVolume)
+            putExtra(AlarmForegroundService.EXTRA_RINGTONE_URI, alarm.ringtoneUri)
+            putExtra(AlarmForegroundService.EXTRA_SNOOZE_MINUTES, alarm.snoozeMinutes)
+        }
+        runCatching {
+            ContextCompat.startForegroundService(appContext, serviceIntent)
+        }.onFailure {
+            notificationManager.postSimpleNotification(
+                id = AlarmForegroundService.FOREGROUND_NOTIFICATION_ID,
+                channelId = RRChannels.ALARMS,
+                title = "Alarm: ${alarm.label}",
+                body = "Tap to open RR Reminder",
+                sourceType = "ALARM",
+                sourceId = alarm.id,
+            )
+        }
+        launchRingActivity(alarm.id, alarm.label, false, alarm.snoozeMinutes)
     }
 
     private suspend fun triggerTimerCompletionAlert(timer: TimerEntity) {
-        val vibrate = runCatching { preferencesRepository.getSnapshot().vibrationEnabled }.getOrDefault(true)
+        val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
+        val vibrate = prefs?.vibrationEnabled ?: true
+        setActiveAlert(
+            id = timer.id,
+            label = timer.label,
+            isTimer = true,
+            snoozeMinutes = 10,
+        )
         val serviceIntent = Intent(appContext, AlarmForegroundService::class.java).apply {
             action = AlarmForegroundService.ACTION_START
             putExtra(AlarmForegroundService.EXTRA_ID, timer.id)
@@ -140,6 +259,7 @@ class AppContainer(context: Context) {
                 sourceId = timer.id,
             )
         }
+        launchRingActivity(timer.id, timer.label, true, 10)
     }
 
     fun emitClockTick() {
@@ -191,6 +311,7 @@ class AppContainer(context: Context) {
                             fingerprint = fingerprint,
                         )
                     }
+                    scheduler.rescheduleAll(database)
                 }
             }
         }
@@ -204,6 +325,7 @@ class AppContainer(context: Context) {
                 config = cfg,
                 fingerprint = cfg.syncFingerprint(),
             )
+            runCatching { scheduler.rescheduleAll(database) }
         }
         emitClockTick()
     }
@@ -216,7 +338,7 @@ class AppContainer(context: Context) {
         ReminderRepository(appContext, database.reminderDao(), preferencesRepository, scheduler)
     }
     val alarmRepository: AlarmRepository by lazy {
-        AlarmRepository(appContext, database.alarmDao(), scheduler)
+        AlarmRepository(appContext, database.alarmDao(), preferencesRepository, scheduler)
     }
     val weatherRepository: WeatherRepository by lazy {
         WeatherRepository(
@@ -234,7 +356,7 @@ class AppContainer(context: Context) {
     val noteRepository: NoteRepository by lazy { NoteRepository(database.noteDao()) }
     val habitRepository: HabitRepository by lazy { HabitRepository(database.habitDao()) }
     val routineFocusRepository: RoutineFocusRepository by lazy {
-        RoutineFocusRepository(database.routineDao(), database.focusDao(), scheduler)
+        RoutineFocusRepository(database.routineDao(), database.focusDao(), preferencesRepository, scheduler)
     }
     val calendarEventRepository: CalendarEventRepository by lazy {
         CalendarEventRepository(database.calendarEventDao())

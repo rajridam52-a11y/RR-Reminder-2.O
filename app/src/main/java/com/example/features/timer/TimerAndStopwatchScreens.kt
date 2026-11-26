@@ -1,5 +1,9 @@
 package com.example.features.timer
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,11 +23,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.database.StopwatchSessionEntity
+import com.example.core.permissions.PermissionHelper
+import java.util.Locale
 import com.example.core.database.TimerEntity
 import com.example.core.database.TimerHistoryEntity
 import com.example.core.database.TimerPresetEntity
@@ -51,12 +61,34 @@ fun TimerTabContent(
     onAddPreset: (String, Long) -> Unit,
     onClearHistory: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val extra = LocalRRExtraColors.current
     var showCreateDialog by remember { mutableStateOf(false) }
     var selectedDurationMs by remember { mutableLongStateOf(15 * 60_000L) }
     var selectedPresetLabel by remember { mutableStateOf("15 min") }
     var selectedTimerId by remember { mutableStateOf<Long?>(null) }
     var previewPresetMode by remember { mutableStateOf(false) }
+
+    var notifAllowed by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
+    var exactAlarmAllowed by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notifAllowed = PermissionHelper.hasNotificationPermission(context)
+                exactAlarmAllowed = PermissionHelper.canScheduleExactAlarms(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notifAllowed = granted || PermissionHelper.hasNotificationPermission(context)
+    }
 
     val latestRunningId = timers.filter { it.isRunning }.maxOfOrNull { it.id }
     LaunchedEffect(latestRunningId) {
@@ -108,6 +140,62 @@ fun TimerTabContent(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             contentPadding = PaddingValues(top = 14.dp, bottom = 96.dp),
         ) {
+            if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0x33D97706),
+                        border = BorderStroke(1.dp, Color(0x77FBBF24)),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Rounded.NotificationsOff, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(18.dp))
+                            Text(
+                                text = "Allow notifications so finished timers ring in the background.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                                Text("Allow", color = Color(0xFF38BDF8))
+                            }
+                        }
+                    }
+                }
+            } else if (!exactAlarmAllowed) {
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0x33E11D48),
+                        border = BorderStroke(1.dp, Color(0x77FB7185)),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Rounded.AlarmOff, contentDescription = null, tint = Color(0xFFFB7185), modifier = Modifier.size(18.dp))
+                            Text(
+                                text = "Exact alarm permission off — background timers may delay.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
+                                Text("Enable", color = Color(0xFF38BDF8))
+                            }
+                        }
+                    }
+                }
+            }
+
             // Screen 9 Hero Ring + Quick Presets + Purple-Blue Start CTA
             item {
                 Column(
@@ -259,6 +347,9 @@ fun TimerTabContent(
                             leadingIcon = Icons.Rounded.PlayArrow,
                             colors = listOf(Color(0xFF7C3AED), Color(0xFF2563EB)),
                             onClick = {
+                                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
                                 previewPresetMode = false
                                 onCreateTimer(selectedPresetLabel, selectedDurationMs, false)
                             },
@@ -446,6 +537,9 @@ fun TimerTabContent(
         CreateTimerDialog(
             onDismiss = { showCreateDialog = false },
             onCreate = { label, ms, repeat, saveAsPreset ->
+                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
                 onCreateTimer(label, ms, repeat)
                 if (saveAsPreset) onAddPreset(label, ms)
                 showCreateDialog = false
@@ -533,7 +627,7 @@ private fun DurationStepper(
         IconButton(onClick = { onChange((value + 1).let { if (it > range.last) range.first else it }) }) {
             Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Increase $title")
         }
-        Text(String.format("%02d", value), style = TabularClockMedium)
+        Text(String.format(Locale.US, "%02d", value), style = TabularClockMedium)
         IconButton(onClick = { onChange((value - 1).let { if (it < range.first) range.last else it }) }) {
             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Decrease $title")
         }

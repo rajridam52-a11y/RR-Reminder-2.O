@@ -98,8 +98,11 @@ object ScheduleCalculator {
         return candidate.toInstant().toEpochMilli()
     }
 
-    fun computeNextAlarmTrigger(alarm: AlarmEntity, nowMillis: Long = System.currentTimeMillis()): Long =
-        computeNextAlarmTrigger(alarm.hour, alarm.minute, alarm.repeatDaysMask, nowMillis)
+    fun computeNextAlarmTrigger(
+        alarm: AlarmEntity,
+        nowMillis: Long = System.currentTimeMillis(),
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ): Long = computeNextAlarmTrigger(alarm.hour, alarm.minute, alarm.repeatDaysMask, nowMillis, zoneId)
 
     fun isDayInMask(dayOfWeek: DayOfWeek, mask: Int): Boolean {
         val bit = dayOfWeek.value - 1 // Mon=0 .. Sun=6

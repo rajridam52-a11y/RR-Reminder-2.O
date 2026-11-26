@@ -12,10 +12,15 @@ import com.example.core.database.ReminderEntity
 import com.example.core.database.RoutineEntity
 import com.example.core.database.TimerEntity
 import com.example.core.datastore.UserPreferencesRepository
+import com.example.core.network.NetworkTimeProvider
+import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-class ReminderAlarmScheduler(private val context: Context) {
+class ReminderAlarmScheduler(
+    private val context: Context,
+    private val networkTimeProvider: NetworkTimeProvider? = null,
+) {
 
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
@@ -29,21 +34,37 @@ class ReminderAlarmScheduler(private val context: Context) {
         }.getOrDefault(false)
     }
 
-    fun scheduleReminder(reminder: ReminderEntity, leadMinutes: Int = 0) {
+    private fun appNowMillis(): Long =
+        networkTimeProvider?.currentEpochMillis() ?: System.currentTimeMillis()
+
+    private fun toDeviceWallClockTrigger(appTriggerMillis: Long, appNow: Long): Long {
+        val delayMs = (appTriggerMillis - appNow).coerceAtLeast(1_000L)
+        return System.currentTimeMillis() + delayMs
+    }
+
+    fun scheduleReminder(
+        reminder: ReminderEntity,
+        leadMinutes: Int = 0,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ) {
         cancelReminder(reminder.id)
         if (reminder.isCompleted) return
 
-        val now = System.currentTimeMillis()
+        val appNow = appNowMillis()
         val rawTrigger = reminder.snoozedUntilMillis ?: reminder.triggerAtMillis
-        val effectiveTrigger = if (rawTrigger <= now - 60_000L) {
-            ScheduleCalculator.computeNextReminderTrigger(reminder, afterMillis = now) ?: return
+        val effectiveTrigger = if (rawTrigger <= appNow - 60_000L) {
+            ScheduleCalculator.computeNextReminderTrigger(
+                reminder = reminder,
+                afterMillis = appNow,
+                targetZone = zoneId,
+            ) ?: return
         } else {
             rawTrigger
         }
 
         scheduleExactOrFallback(
             requestCode = REMINDER_CODE_BASE + reminder.id.toInt(),
-            triggerAtMillis = effectiveTrigger,
+            triggerAtMillis = toDeviceWallClockTrigger(effectiveTrigger, appNow),
             intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
                 action = ReminderAlarmReceiver.ACTION_FIRE_REMINDER
                 putExtra(ReminderAlarmReceiver.EXTRA_ID, reminder.id)
@@ -52,10 +73,10 @@ class ReminderAlarmScheduler(private val context: Context) {
 
         if (leadMinutes > 0 && reminder.snoozedUntilMillis == null) {
             val leadAt = effectiveTrigger - leadMinutes * 60_000L
-            if (leadAt > now + 5_000L) {
+            if (leadAt > appNow + 5_000L) {
                 scheduleExactOrFallback(
                     requestCode = REMINDER_LEAD_CODE_BASE + reminder.id.toInt(),
-                    triggerAtMillis = leadAt,
+                    triggerAtMillis = toDeviceWallClockTrigger(leadAt, appNow),
                     intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
                         action = ReminderAlarmReceiver.ACTION_FIRE_REMINDER_LEAD
                         putExtra(ReminderAlarmReceiver.EXTRA_ID, reminder.id)
@@ -94,11 +115,20 @@ class ReminderAlarmScheduler(private val context: Context) {
         }
     }
 
-    fun scheduleAlarm(alarm: AlarmEntity): Long? {
+    fun scheduleAlarm(
+        alarm: AlarmEntity,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ): Long? {
         cancelAlarm(alarm.id)
         if (!alarm.isEnabled) return null
 
-        val nextTrigger = ScheduleCalculator.computeNextAlarmTrigger(alarm)
+        val appNow = appNowMillis()
+        val nextAppTrigger = ScheduleCalculator.computeNextAlarmTrigger(
+            alarm = alarm,
+            nowMillis = appNow,
+            zoneId = zoneId,
+        )
+        val wallTrigger = toDeviceWallClockTrigger(nextAppTrigger, appNow)
         val fireIntent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ReminderAlarmReceiver.ACTION_FIRE_ALARM
             putExtra(ReminderAlarmReceiver.EXTRA_ID, alarm.id)
@@ -120,30 +150,33 @@ class ReminderAlarmScheduler(private val context: Context) {
         runCatching {
             if (canScheduleExactAlarms()) {
                 alarmManager.setAlarmClock(
-                    AlarmManager.AlarmClockInfo(nextTrigger, showIntent),
+                    AlarmManager.AlarmClockInfo(wallTrigger, showIntent),
                     pi,
                 )
             } else {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextTrigger, pi)
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wallTrigger, pi)
             }
         }.onFailure {
             runCatching {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextTrigger, pi)
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wallTrigger, pi)
             }
         }
-        return nextTrigger
+        return nextAppTrigger
     }
 
-    fun scheduleSnoozedAlarm(alarmId: Long, snoozeMinutes: Int) {
-        val triggerAt = System.currentTimeMillis() + snoozeMinutes.coerceIn(1, 60) * 60_000L
+    fun scheduleSnoozedAlarm(alarmId: Long, snoozeMinutes: Int): Long {
+        val delayMs = snoozeMinutes.coerceIn(1, 60) * 60_000L
+        val wallTrigger = System.currentTimeMillis() + delayMs
+        val appTrigger = appNowMillis() + delayMs
         scheduleExactOrFallback(
             requestCode = ALARM_CODE_BASE + alarmId.toInt(),
-            triggerAtMillis = triggerAt,
+            triggerAtMillis = wallTrigger,
             intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
                 action = ReminderAlarmReceiver.ACTION_FIRE_ALARM
                 putExtra(ReminderAlarmReceiver.EXTRA_ID, alarmId)
             },
         )
+        return appTrigger
     }
 
     fun cancelAlarm(alarmId: Long) {
@@ -191,11 +224,15 @@ class ReminderAlarmScheduler(private val context: Context) {
         }
     }
 
-    fun scheduleRoutine(routine: RoutineEntity) {
+    fun scheduleRoutine(
+        routine: RoutineEntity,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ) {
         cancelRoutine(routine.id)
         if (!routine.reminderEnabled) return
 
-        val now = ZonedDateTime.now(ZoneId.systemDefault())
+        val appNow = appNowMillis()
+        val now = Instant.ofEpochMilli(appNow).atZone(zoneId)
         var next = now.withHour(routine.startHour.coerceIn(0, 23))
             .withMinute(routine.startMinute.coerceIn(0, 59))
             .withSecond(0)
@@ -204,7 +241,7 @@ class ReminderAlarmScheduler(private val context: Context) {
 
         scheduleExactOrFallback(
             requestCode = ROUTINE_CODE_BASE + routine.id.toInt(),
-            triggerAtMillis = next.toInstant().toEpochMilli(),
+            triggerAtMillis = toDeviceWallClockTrigger(next.toInstant().toEpochMilli(), appNow),
             intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
                 action = ReminderAlarmReceiver.ACTION_FIRE_ROUTINE
                 putExtra(ReminderAlarmReceiver.EXTRA_ID, routine.id)
@@ -252,15 +289,17 @@ class ReminderAlarmScheduler(private val context: Context) {
     }
 
     suspend fun rescheduleAll(db: RRDatabase) {
-        val leadMinutes = runCatching {
-            UserPreferencesRepository(context).getSnapshot().defaultReminderLeadMinutes
-        }.getOrDefault(0)
+        val prefsSnap = runCatching {
+            UserPreferencesRepository(context).getSnapshot()
+        }.getOrNull()
+        val leadMinutes = prefsSnap?.defaultReminderLeadMinutes ?: 0
+        val activeZone = prefsSnap?.primaryClockZone?.toZoneId() ?: ZoneId.systemDefault()
 
         db.reminderDao().getAllActiveSync().forEach { reminder ->
-            scheduleReminder(reminder, leadMinutes = leadMinutes)
+            scheduleReminder(reminder, leadMinutes = leadMinutes, zoneId = activeZone)
         }
         db.alarmDao().getAllSync().filter { it.isEnabled }.forEach { alarm ->
-            val next = scheduleAlarm(alarm)
+            val next = scheduleAlarm(alarm, zoneId = activeZone)
             if (next != null && next != alarm.nextTriggerAtMillis) {
                 db.alarmDao().update(alarm.copy(nextTriggerAtMillis = next))
             }
@@ -276,7 +315,7 @@ class ReminderAlarmScheduler(private val context: Context) {
             }
         }
         db.routineDao().getAllSync().filter { it.reminderEnabled }.forEach { routine ->
-            scheduleRoutine(routine)
+            scheduleRoutine(routine, zoneId = activeZone)
         }
     }
 

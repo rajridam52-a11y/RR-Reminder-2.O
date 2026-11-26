@@ -27,12 +27,14 @@ class ReminderRepository(
             reminder.id
         }
         val saved = reminder.copy(id = id)
-        val leadMinutes = runCatching { prefsRepo.getSnapshot().defaultReminderLeadMinutes }.getOrDefault(0)
+        val snap = runCatching { prefsRepo.getSnapshot() }.getOrNull()
+        val leadMinutes = snap?.defaultReminderLeadMinutes ?: 0
+        val activeZone = snap?.primaryClockZone?.toZoneId() ?: java.time.ZoneId.systemDefault()
         runCatching {
             if (saved.isCompleted) {
                 scheduler.cancelReminder(id)
             } else {
-                scheduler.scheduleReminder(saved, leadMinutes)
+                scheduler.scheduleReminder(saved, leadMinutes, activeZone)
             }
         }
         WidgetUpdateHelper.updateAllWidgets(context)
@@ -47,9 +49,11 @@ class ReminderRepository(
             reminder.copy(isCompleted = false, completedAtMillis = null, updatedAtMillis = now)
         }
         dao.update(updated)
-        val leadMinutes = runCatching { prefsRepo.getSnapshot().defaultReminderLeadMinutes }.getOrDefault(0)
+        val snap = runCatching { prefsRepo.getSnapshot() }.getOrNull()
+        val leadMinutes = snap?.defaultReminderLeadMinutes ?: 0
+        val activeZone = snap?.primaryClockZone?.toZoneId() ?: java.time.ZoneId.systemDefault()
         runCatching {
-            if (updated.isCompleted) scheduler.cancelReminder(updated.id) else scheduler.scheduleReminder(updated, leadMinutes)
+            if (updated.isCompleted) scheduler.cancelReminder(updated.id) else scheduler.scheduleReminder(updated, leadMinutes, activeZone)
         }
         WidgetUpdateHelper.updateAllWidgets(context)
     }
@@ -58,7 +62,10 @@ class ReminderRepository(
         val until = System.currentTimeMillis() + minutes * 60_000L
         val updated = reminder.copy(snoozedUntilMillis = until, isCompleted = false, updatedAtMillis = System.currentTimeMillis())
         dao.update(updated)
-        runCatching { scheduler.scheduleReminder(updated) }
+        val snap = runCatching { prefsRepo.getSnapshot() }.getOrNull()
+        val leadMinutes = snap?.defaultReminderLeadMinutes ?: 0
+        val activeZone = snap?.primaryClockZone?.toZoneId() ?: java.time.ZoneId.systemDefault()
+        runCatching { scheduler.scheduleReminder(updated, leadMinutes, activeZone) }
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
@@ -69,8 +76,10 @@ class ReminderRepository(
     }
 
     suspend fun rescheduleAllReminders(leadMinutes: Int) {
+        val activeZone = runCatching { prefsRepo.getSnapshot().primaryClockZone.toZoneId() }
+            .getOrDefault(java.time.ZoneId.systemDefault())
         dao.getAllActiveSync().forEach { reminder ->
-            runCatching { scheduler.scheduleReminder(reminder, leadMinutes) }
+            runCatching { scheduler.scheduleReminder(reminder, leadMinutes, activeZone) }
         }
     }
 }
@@ -78,12 +87,18 @@ class ReminderRepository(
 class AlarmRepository(
     private val context: Context,
     private val dao: AlarmDao,
+    private val prefsRepo: UserPreferencesRepository,
     private val scheduler: ReminderAlarmScheduler,
 ) {
+    private val alarmMutex = Mutex()
     val alarms: Flow<List<AlarmEntity>> = dao.observeAll()
     val history: Flow<List<AlarmHistoryEntity>> = dao.observeHistory()
 
-    suspend fun saveAlarm(alarm: AlarmEntity): Long {
+    private suspend fun activeZoneId(): java.time.ZoneId = runCatching {
+        prefsRepo.getSnapshot().primaryClockZone.toZoneId()
+    }.getOrDefault(java.time.ZoneId.systemDefault())
+
+    suspend fun saveAlarm(alarm: AlarmEntity): Long = alarmMutex.withLock {
         val id = if (alarm.id == 0L) {
             dao.insert(alarm)
         } else {
@@ -91,38 +106,134 @@ class AlarmRepository(
             alarm.id
         }
         val withId = alarm.copy(id = id)
+        val activeZone = activeZoneId()
         val next = runCatching {
             if (withId.isEnabled) {
-                scheduler.scheduleAlarm(withId)
+                scheduler.scheduleAlarm(withId, activeZone)
             } else {
                 scheduler.cancelAlarm(id)
                 null
             }
         }.getOrElse {
-            if (withId.isEnabled) com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(withId) else null
+            if (withId.isEnabled) {
+                com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(
+                    alarm = withId,
+                    zoneId = activeZone,
+                )
+            } else {
+                null
+            }
         }
         dao.update(withId.copy(nextTriggerAtMillis = next))
         WidgetUpdateHelper.updateAllWidgets(context)
-        return id
+        id
     }
 
-    suspend fun toggleAlarm(alarm: AlarmEntity, enabled: Boolean) {
+    suspend fun toggleAlarm(alarm: AlarmEntity, enabled: Boolean) = alarmMutex.withLock {
         val updated = alarm.copy(isEnabled = enabled)
+        val activeZone = activeZoneId()
         val next = runCatching {
             if (enabled) {
-                scheduler.scheduleAlarm(updated)
+                scheduler.scheduleAlarm(updated, activeZone)
             } else {
                 scheduler.cancelAlarm(alarm.id)
                 null
             }
         }.getOrElse {
-            if (enabled) com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(updated) else null
+            if (enabled) {
+                com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(
+                    alarm = updated,
+                    zoneId = activeZone,
+                )
+            } else {
+                null
+            }
         }
         dao.update(updated.copy(nextTriggerAtMillis = next))
         WidgetUpdateHelper.updateAllWidgets(context)
     }
 
-    suspend fun deleteAlarm(id: Long) {
+    suspend fun consumeDueAlarm(
+        alarmId: Long,
+        nowMillis: Long,
+        fromReceiver: Boolean,
+    ): AlarmEntity? = alarmMutex.withLock {
+        val alarm = dao.getById(alarmId) ?: return@withLock null
+        if (!alarm.isEnabled) return@withLock null
+        val nextAt = alarm.nextTriggerAtMillis
+        val activeZone = activeZoneId()
+
+        if (!fromReceiver) {
+            if (nextAt == null || nowMillis < nextAt) return@withLock null
+            // If missed by > 2 minutes while app was closed, quietly roll forward without late ringing.
+            if (nowMillis - nextAt > 120_000L) {
+                if (alarm.repeatDaysMask == 0) {
+                    dao.update(alarm.copy(isEnabled = false, nextTriggerAtMillis = null))
+                    runCatching { scheduler.cancelAlarm(alarm.id) }
+                } else {
+                    val rolled = runCatching { scheduler.scheduleAlarm(alarm, activeZone) }
+                        .getOrElse {
+                            com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(
+                                alarm = alarm,
+                                nowMillis = nowMillis,
+                                zoneId = activeZone,
+                            )
+                        }
+                    dao.update(alarm.copy(nextTriggerAtMillis = rolled))
+                }
+                return@withLock null
+            }
+        }
+
+        dao.insertHistory(
+            AlarmHistoryEntity(
+                alarmId = alarm.id,
+                label = alarm.label,
+                triggeredAtMillis = System.currentTimeMillis(),
+                action = "FIRED",
+            ),
+        )
+        if (alarm.repeatDaysMask == 0) {
+            dao.update(alarm.copy(isEnabled = false, nextTriggerAtMillis = null))
+            runCatching { scheduler.cancelAlarm(alarm.id) }
+        } else {
+            val next = runCatching { scheduler.scheduleAlarm(alarm, activeZone) }
+                .getOrElse {
+                    com.example.core.notifications.ScheduleCalculator.computeNextAlarmTrigger(
+                        alarm = alarm,
+                        nowMillis = nowMillis,
+                        zoneId = activeZone,
+                    )
+                }
+            dao.update(alarm.copy(nextTriggerAtMillis = next))
+        }
+        WidgetUpdateHelper.updateAllWidgets(context)
+        alarm
+    }
+
+    suspend fun snoozeAlarm(alarmId: Long, snoozeMinutes: Int) = alarmMutex.withLock {
+        val appNextTrigger = scheduler.scheduleSnoozedAlarm(alarmId, snoozeMinutes)
+        val alarm = dao.getById(alarmId)
+        if (alarm != null) {
+            dao.update(
+                alarm.copy(
+                    isEnabled = true,
+                    nextTriggerAtMillis = appNextTrigger,
+                ),
+            )
+            dao.insertHistory(
+                AlarmHistoryEntity(
+                    alarmId = alarm.id,
+                    label = alarm.label,
+                    triggeredAtMillis = System.currentTimeMillis(),
+                    action = "SNOOZED",
+                ),
+            )
+            WidgetUpdateHelper.updateAllWidgets(context)
+        }
+    }
+
+    suspend fun deleteAlarm(id: Long) = alarmMutex.withLock {
         runCatching { scheduler.cancelAlarm(id) }
         dao.deleteById(id)
         WidgetUpdateHelper.updateAllWidgets(context)
@@ -452,6 +563,7 @@ class HabitRepository(private val dao: HabitDao) {
 class RoutineFocusRepository(
     private val routineDao: RoutineDao,
     private val focusDao: FocusDao,
+    private val prefsRepo: UserPreferencesRepository,
     private val scheduler: ReminderAlarmScheduler,
 ) {
     val routines: Flow<List<RoutineWithSteps>> = routineDao.observeAllWithSteps()
@@ -476,8 +588,10 @@ class RoutineFocusRepository(
             )
         }
         val saved = routine.copy(id = id)
+        val activeZone = runCatching { prefsRepo.getSnapshot().primaryClockZone.toZoneId() }
+            .getOrDefault(java.time.ZoneId.systemDefault())
         runCatching {
-            if (saved.reminderEnabled) scheduler.scheduleRoutine(saved) else scheduler.cancelRoutine(id)
+            if (saved.reminderEnabled) scheduler.scheduleRoutine(saved, activeZone) else scheduler.cancelRoutine(id)
         }
         return id
     }

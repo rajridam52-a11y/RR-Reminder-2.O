@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.example.RRReminderApp
 import com.example.core.database.RRDatabase
 import com.example.widgets.WidgetUpdateHelper
 import kotlinx.coroutines.CoroutineScope
@@ -18,8 +19,9 @@ class BootAndTimeReceiver : BroadcastReceiver() {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val appContext = context.applicationContext
-                    val db = RRDatabase.getInstance(appContext)
-                    val scheduler = ReminderAlarmScheduler(appContext)
+                    val container = (appContext as? RRReminderApp)?.container
+                    val db = container?.database ?: RRDatabase.getInstance(appContext)
+                    val scheduler = container?.scheduler ?: ReminderAlarmScheduler(appContext)
                     scheduler.rescheduleAll(db)
                     WidgetUpdateHelper.updateAllWidgets(appContext)
                 } catch (t: Throwable) {

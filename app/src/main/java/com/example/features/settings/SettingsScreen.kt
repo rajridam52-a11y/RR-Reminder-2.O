@@ -38,6 +38,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
 import com.example.core.datastore.ClockFaceStyle
 import com.example.core.datastore.DateFormatStyle
@@ -48,6 +51,7 @@ import com.example.core.firebase.GlobalAppConfig
 import com.example.core.firebase.OWNER_ADMIN_EMAIL
 import com.example.core.firebase.OwnerTimeMode
 import com.example.core.health.SystemHealthReport
+import com.example.core.notifications.AlarmForegroundService
 import com.example.core.notifications.ScheduleCalculator
 import com.example.core.permissions.PermissionHelper
 import com.example.features.health.healthScoreColor
@@ -121,10 +125,10 @@ fun SettingsScreen(
 
     val soundTitle = remember(preferences.notificationSoundUri) {
         val raw = preferences.notificationSoundUri
-        if (raw.isNullOrBlank()) {
-            "System Default"
-        } else {
-            runCatching { RingtoneManager.getRingtone(context, Uri.parse(raw)).getTitle(context) }
+        when {
+            raw.isNullOrBlank() -> "System Default"
+            raw == AlarmForegroundService.SILENT_RINGTONE_URI -> "Silent"
+            else -> runCatching { RingtoneManager.getRingtone(context, Uri.parse(raw)).getTitle(context) }
                 .getOrDefault("Custom Sound")
         }
     }
@@ -139,7 +143,7 @@ fun SettingsScreen(
                 @Suppress("DEPRECATION")
                 res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
             }
-            onSetNotificationSoundUri(uri?.toString())
+            onSetNotificationSoundUri(uri?.toString() ?: AlarmForegroundService.SILENT_RINGTONE_URI)
         }
     }
 
@@ -169,8 +173,28 @@ fun SettingsScreen(
         onSetUseDeviceCalendar(granted)
     }
 
-    val exactAlarmOk = PermissionHelper.canScheduleExactAlarms(context)
-    val notifOk = PermissionHelper.hasNotificationPermission(context)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var exactAlarmOk by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+    var notifOk by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
+    var fullScreenOk by remember { mutableStateOf(PermissionHelper.canUseFullScreenIntent(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exactAlarmOk = PermissionHelper.canScheduleExactAlarms(context)
+                notifOk = PermissionHelper.hasNotificationPermission(context)
+                fullScreenOk = PermissionHelper.canUseFullScreenIntent(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notifOk = granted || PermissionHelper.hasNotificationPermission(context)
+    }
 
     RRBackgroundContainer {
         Scaffold(
@@ -553,8 +577,15 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            OutlinedButton(onClick = { PermissionHelper.openAppNotificationSettings(context) }) {
-                                Text("Configure")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (!notifOk && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    Button(onClick = { notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                                        Text("Allow")
+                                    }
+                                }
+                                OutlinedButton(onClick = { PermissionHelper.openAppNotificationSettings(context) }) {
+                                    Text("Configure")
+                                }
                             }
                         }
                         Spacer(modifier = Modifier.height(6.dp))
@@ -579,6 +610,32 @@ fun SettingsScreen(
                         if (!exactAlarmOk) {
                             TextButton(onClick = { PermissionHelper.openExactAlarmSettings(context) }) {
                                 Text("Open Exact Alarm Settings")
+                            }
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Full-Screen Alarm Display", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        if (fullScreenOk) "Full-screen alarm wake enabled" else "Allow alarms to show over the lock screen",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                RRStatusPill(
+                                    text = if (fullScreenOk) "Active" else "Check",
+                                    color = if (fullScreenOk) extra.success else extra.warning,
+                                )
+                            }
+                            if (!fullScreenOk) {
+                                TextButton(onClick = { PermissionHelper.openFullScreenIntentSettings(context) }) {
+                                    Text("Open Full-Screen Intent Settings")
+                                }
                             }
                         }
                     }
@@ -625,7 +682,9 @@ fun SettingsScreen(
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
                                     putExtra(
                                         RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                                        preferences.notificationSoundUri?.let { Uri.parse(it) },
+                                        preferences.notificationSoundUri
+                                            ?.takeIf { it.isNotBlank() && it != AlarmForegroundService.SILENT_RINGTONE_URI }
+                                            ?.let { Uri.parse(it) },
                                     )
                                 }
                                 runCatching { notifSoundLauncher.launch(intent) }

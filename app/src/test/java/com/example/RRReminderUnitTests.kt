@@ -578,4 +578,55 @@ class RRReminderUnitTests {
         assertTrue(initialResult.isSuccess)
         assertNull(initialResult.getOrNull())
     }
+
+    @Test
+    fun `fixed owner time override still ticks forward monotonically when base clock is behind anchor`() {
+        var elapsedMs = 2_000L
+        var baseMs = 1_700_000_000_000L
+        val anchorInFuture = 1_750_000_000_000L
+        val targetFixed = 1_800_000_000_000L
+
+        val provider = NetworkTimeProvider(
+            okHttpClient = NetworkModule.httpClient,
+            elapsedMsProvider = { elapsedMs },
+            systemNowMsProvider = { baseMs },
+        )
+        provider.setOwnerTimeOverride(
+            OwnerTimeOverride(
+                enabled = true,
+                mode = "FIXED",
+                fixedTargetEpochMillis = targetFixed,
+                fixedAnchorEpochMillis = anchorInFuture,
+            ),
+        )
+
+        val t0 = provider.currentEpochMillis()
+        assertEquals(targetFixed, t0)
+
+        elapsedMs += 4_500L
+        val t1 = provider.currentEpochMillis()
+        assertEquals(targetFixed + 4_500L, t1)
+    }
+
+    @Test
+    fun `computeNextAlarmTrigger with AlarmEntity respects selected zoneId IST vs UTC`() {
+        val utc = ZoneId.of("UTC")
+        val ist = ZoneId.of("Asia/Kolkata")
+        // 2026-11-26 02:00 UTC == 07:30 IST
+        val nowMs = ZonedDateTime.of(2026, 11, 26, 2, 0, 0, 0, utc).toInstant().toEpochMilli()
+        val alarm = com.example.core.database.AlarmEntity(
+            id = 7L,
+            label = "Morning Bell",
+            hour = 8,
+            minute = 0,
+            isEnabled = true,
+        )
+
+        val nextUtc = ScheduleCalculator.computeNextAlarmTrigger(alarm, nowMillis = nowMs, zoneId = utc)
+        val nextIst = ScheduleCalculator.computeNextAlarmTrigger(alarm, nowMillis = nowMs, zoneId = ist)
+
+        // In UTC, 08:00 UTC is 6h ahead; in IST, 08:00 IST (02:30 UTC) is 30m ahead
+        assertEquals(nowMs + 6 * 3_600_000L, nextUtc)
+        assertEquals(nowMs + 30 * 60_000L, nextIst)
+    }
 }

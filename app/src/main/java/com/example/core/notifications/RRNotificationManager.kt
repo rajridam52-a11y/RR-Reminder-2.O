@@ -166,7 +166,7 @@ class RRNotificationManager(
         if (!vibrate) {
             builder.setVibrate(longArrayOf(0L))
         }
-        soundUriString?.let { raw ->
+        soundUriString?.takeIf { it.isNotBlank() && it != AlarmForegroundService.SILENT_RINGTONE_URI }?.let { raw ->
             runCatching { Uri.parse(raw) }.getOrNull()?.let { builder.setSound(it) }
         }
 
@@ -179,6 +179,7 @@ class RRNotificationManager(
         label: String,
         isTimer: Boolean,
         snoozeMinutes: Int,
+        silent: Boolean = false,
     ): android.app.Notification {
         ensureChannels()
 
@@ -218,6 +219,10 @@ class RRNotificationManager(
             .setFullScreenIntent(fullScreenPi, true)
             .setContentIntent(fullScreenPi)
             .addAction(0, "Dismiss", dismissPi)
+
+        if (silent) {
+            builder.setSilent(true)
+        }
 
         if (!isTimer) {
             val snoozePi = PendingIntent.getBroadcast(

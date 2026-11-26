@@ -47,6 +47,9 @@ class NetworkTimeProvider(
     @Volatile
     private var ownerOverride: OwnerTimeOverride = OwnerTimeOverride()
 
+    @Volatile
+    private var overrideAppliedElapsedMs: Long = elapsedMsProvider()
+
     private val _syncStatus = MutableStateFlow(NetworkTimeSyncStatus())
     val syncStatus: StateFlow<NetworkTimeSyncStatus> = _syncStatus.asStateFlow()
 
@@ -64,8 +67,9 @@ class NetworkTimeProvider(
             "OFFSET" -> base + (ov.offsetMinutes.coerceIn(-1440L, 1440L) * 60_000L)
             "FIXED" -> {
                 if (ov.fixedTargetEpochMillis > 0L && ov.fixedAnchorEpochMillis > 0L) {
-                    val elapsedSinceAnchor = (base - ov.fixedAnchorEpochMillis).coerceAtLeast(0L)
-                    ov.fixedTargetEpochMillis + elapsedSinceAnchor
+                    val baseElapsed = (base - ov.fixedAnchorEpochMillis).coerceAtLeast(0L)
+                    val monoElapsed = (elapsedMsProvider() - overrideAppliedElapsedMs).coerceAtLeast(0L)
+                    ov.fixedTargetEpochMillis + maxOf(baseElapsed, monoElapsed)
                 } else {
                     base
                 }
@@ -79,6 +83,7 @@ class NetworkTimeProvider(
     fun driftFromDeviceMillis(): Long = baseNetworkEpochMillis() - systemNowMsProvider()
 
     fun setOwnerTimeOverride(override: OwnerTimeOverride) {
+        overrideAppliedElapsedMs = elapsedMsProvider()
         ownerOverride = override
         val label = if (!override.enabled || override.mode == "GOOGLE_AUTO") {
             null

@@ -1,5 +1,6 @@
 package com.example.navigation
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -44,6 +45,7 @@ import com.example.core.datastore.TimeFormatMode
 import com.example.core.datastore.UserPreferences
 import com.example.core.di.AppContainer
 import com.example.core.firebase.isOwnerUser
+import com.example.core.notifications.ReminderAlarmReceiver
 import com.example.features.alarms.AlarmsTabContent
 import com.example.features.alarms.AlarmsViewModel
 import com.example.features.auth.AuthScreen
@@ -242,6 +244,7 @@ private fun RRMainShell(
     val homeState by mainViewModel.homeState.collectAsStateWithLifecycle()
     val liveNowMillis by mainViewModel.nowMillis.collectAsStateWithLifecycle()
     val timeSyncStatus by mainViewModel.timeSyncStatus.collectAsStateWithLifecycle()
+    val activeRingAlert by container.activeRingAlert.collectAsStateWithLifecycle()
     val isOwnerAccount = isOwnerUser(currentUser.email, currentUser.isEmailVerified)
 
     // 0=Live Clock, 1=Alarms, 2=World Clock, 3=Timer, 4=Stopwatch
@@ -880,6 +883,74 @@ private fun RRMainShell(
             },
             confirmButton = {
                 TextButton(onClick = { showDrawerAboutDialog = false }) { Text("Close") }
+            },
+        )
+    }
+
+    activeRingAlert?.let { alert ->
+        AlertDialog(
+            onDismissRequest = {},
+            icon = {
+                Icon(
+                    imageVector = if (alert.isTimer) Icons.Rounded.Timer else Icons.Rounded.Alarm,
+                    contentDescription = "Ringing alert",
+                    tint = extra.accentPrimary,
+                    modifier = Modifier.size(36.dp),
+                )
+            },
+            title = {
+                Text(
+                    text = if (alert.isTimer) "Timer Finished" else "Alarm Ringing",
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                )
+            },
+            text = {
+                Text(
+                    text = alert.label,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        container.clearActiveAlert()
+                        context.sendBroadcast(
+                            Intent(context, ReminderAlarmReceiver::class.java).apply {
+                                action = if (alert.isTimer) {
+                                    ReminderAlarmReceiver.ACTION_DISMISS_TIMER
+                                } else {
+                                    ReminderAlarmReceiver.ACTION_DISMISS_ALARM
+                                }
+                                putExtra(ReminderAlarmReceiver.EXTRA_ID, alert.id)
+                            },
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("inapp_ring_dismiss_btn"),
+                ) {
+                    Text("Dismiss")
+                }
+            },
+            dismissButton = if (!alert.isTimer) {
+                {
+                    OutlinedButton(
+                        onClick = {
+                            container.clearActiveAlert()
+                            context.sendBroadcast(
+                                Intent(context, ReminderAlarmReceiver::class.java).apply {
+                                    action = ReminderAlarmReceiver.ACTION_SNOOZE_ALARM
+                                    putExtra(ReminderAlarmReceiver.EXTRA_ID, alert.id)
+                                    putExtra(ReminderAlarmReceiver.EXTRA_SNOOZE_MINUTES, alert.snoozeMinutes)
+                                },
+                            )
+                        },
+                        modifier = Modifier.testTag("inapp_ring_snooze_btn"),
+                    ) {
+                        Text("Snooze ${alert.snoozeMinutes}m")
+                    }
+                }
+            } else {
+                null
             },
         )
     }

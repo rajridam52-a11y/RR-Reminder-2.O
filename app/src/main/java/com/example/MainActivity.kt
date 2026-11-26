@@ -42,6 +42,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        (application as? RRReminderApp)?.container?.emitClockTick()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         widgetDestination = runCatching { intent.getStringExtra("navigate_to") }.getOrNull()

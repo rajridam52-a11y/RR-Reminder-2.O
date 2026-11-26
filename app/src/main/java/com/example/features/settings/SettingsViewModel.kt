@@ -116,7 +116,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun setPrimaryClockZone(zone: PrimaryClockZone) {
-        viewModelScope.launch { container.preferencesRepository.setPrimaryClockZone(zone) }
+        viewModelScope.launch {
+            container.preferencesRepository.setPrimaryClockZone(zone)
+            runCatching { container.scheduler.rescheduleAll(container.database) }
+        }
     }
 
     fun setTimeFormatMode(mode: TimeFormatMode) {

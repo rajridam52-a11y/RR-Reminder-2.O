@@ -40,6 +40,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.core.datastore.PrimaryClockZone
 import com.example.core.datastore.UserPreferences
@@ -368,10 +371,23 @@ fun OnboardingScreen(
 ) {
     var step by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var notifGranted by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
     var locationGranted by remember { mutableStateOf(PermissionHelper.hasAnyLocationPermission(context)) }
     var exactAlarmGranted by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notifGranted = PermissionHelper.hasNotificationPermission(context)
+                locationGranted = PermissionHelper.hasAnyLocationPermission(context)
+                exactAlarmGranted = PermissionHelper.canScheduleExactAlarms(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),

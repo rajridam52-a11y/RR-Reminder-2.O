@@ -10,10 +10,14 @@ import com.example.core.database.AlarmHistoryEntity
 import com.example.core.database.RRDatabase
 import com.example.core.database.ReminderPriority
 import com.example.core.datastore.UserPreferencesRepository
+import com.example.data.AlarmRepository
+import com.example.data.TimerRepository
+import com.example.features.alarms.AlarmRingActivity
 import com.example.widgets.WidgetUpdateHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.time.ZoneId
 
 class ReminderAlarmReceiver : BroadcastReceiver() {
 
@@ -25,12 +29,15 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val appContext = context.applicationContext
-                val db = RRDatabase.getInstance(appContext)
-                val notifManager = RRNotificationManager(appContext, db.notificationLogDao())
-                val scheduler = ReminderAlarmScheduler(appContext)
-                val prefs = runCatching {
-                    UserPreferencesRepository(appContext).getSnapshot()
-                }.getOrNull()
+                val container = (appContext as? RRReminderApp)?.container
+                val db = container?.database ?: RRDatabase.getInstance(appContext)
+                val prefsRepo = container?.preferencesRepository ?: UserPreferencesRepository(appContext)
+                val notifManager = container?.notificationManager
+                    ?: RRNotificationManager(appContext, db.notificationLogDao())
+                val scheduler = container?.scheduler ?: ReminderAlarmScheduler(appContext)
+                val prefs = runCatching { prefsRepo.getSnapshot() }.getOrNull()
+                val activeZone = prefs?.primaryClockZone?.toZoneId() ?: ZoneId.systemDefault()
+                val appNow = container?.networkTimeProvider?.currentEpochMillis() ?: System.currentTimeMillis()
 
                 when (action) {
                     ACTION_FIRE_REMINDER -> if (id > 0) {
@@ -48,7 +55,8 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                             )
                             val nextTrigger = ScheduleCalculator.computeNextReminderTrigger(
                                 reminder = reminder,
-                                afterMillis = System.currentTimeMillis(),
+                                afterMillis = appNow,
+                                targetZone = activeZone,
                             )
                             if (nextTrigger != null) {
                                 val updated = reminder.copy(
@@ -60,6 +68,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                 scheduler.scheduleReminder(
                                     reminder = updated,
                                     leadMinutes = prefs?.defaultReminderLeadMinutes ?: 0,
+                                    zoneId = activeZone,
                                 )
                             } else if (reminder.snoozedUntilMillis != null) {
                                 db.reminderDao().update(reminder.copy(snoozedUntilMillis = null))
@@ -104,12 +113,13 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                     ACTION_SNOOZE_REMINDER -> if (id > 0) {
                         val reminder = db.reminderDao().getById(id)
                         if (reminder != null && !reminder.isCompleted) {
-                            val snoozeUntil = System.currentTimeMillis() + 10 * 60_000L
+                            val snoozeUntil = appNow + 10 * 60_000L
                             val updated = reminder.copy(snoozedUntilMillis = snoozeUntil)
                             db.reminderDao().update(updated)
                             scheduler.scheduleReminder(
                                 reminder = updated,
                                 leadMinutes = prefs?.defaultReminderLeadMinutes ?: 0,
+                                zoneId = activeZone,
                             )
                         }
                         notifManager.cancelNotification((1000 + id).toInt())
@@ -117,23 +127,20 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                     }
 
                     ACTION_FIRE_ALARM -> if (id > 0) {
-                        val alarm = db.alarmDao().getById(id)
-                        if (alarm != null && alarm.isEnabled) {
-                            db.alarmDao().insertHistory(
-                                AlarmHistoryEntity(
-                                    alarmId = alarm.id,
-                                    label = alarm.label,
-                                    triggeredAtMillis = System.currentTimeMillis(),
-                                    action = "FIRED",
-                                ),
+                        val alarmRepo = container?.alarmRepository
+                            ?: AlarmRepository(appContext, db.alarmDao(), prefsRepo, scheduler)
+                        val alarm = alarmRepo.consumeDueAlarm(
+                            alarmId = id,
+                            nowMillis = appNow,
+                            fromReceiver = true,
+                        )
+                        if (alarm != null) {
+                            container?.setActiveAlert(
+                                id = alarm.id,
+                                label = alarm.label,
+                                isTimer = false,
+                                snoozeMinutes = alarm.snoozeMinutes,
                             )
-                            if (alarm.repeatDaysMask == 0) {
-                                db.alarmDao().update(alarm.copy(isEnabled = false, nextTriggerAtMillis = null))
-                            } else {
-                                val next = scheduler.scheduleAlarm(alarm)
-                                db.alarmDao().update(alarm.copy(nextTriggerAtMillis = next))
-                            }
-
                             val serviceIntent = Intent(appContext, AlarmForegroundService::class.java).apply {
                                 this.action = AlarmForegroundService.ACTION_START
                                 putExtra(AlarmForegroundService.EXTRA_ID, alarm.id)
@@ -156,11 +163,28 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                     sourceId = alarm.id,
                                 )
                             }
+                            runCatching {
+                                appContext.startActivity(
+                                    Intent(appContext, AlarmRingActivity::class.java).apply {
+                                        addFlags(
+                                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                                Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                                        )
+                                        putExtra(AlarmRingActivity.EXTRA_ID, alarm.id)
+                                        putExtra(AlarmRingActivity.EXTRA_LABEL, alarm.label)
+                                        putExtra(AlarmRingActivity.EXTRA_IS_TIMER, false)
+                                        putExtra(AlarmRingActivity.EXTRA_SNOOZE_MINUTES, alarm.snoozeMinutes)
+                                    },
+                                )
+                            }
                         }
                     }
 
                     ACTION_DISMISS_ALARM -> {
                         AlarmForegroundService.stop(appContext)
+                        notifManager.cancelNotification(AlarmForegroundService.FOREGROUND_NOTIFICATION_ID)
+                        container?.clearActiveAlert()
                         if (id > 0) {
                             val alarm = db.alarmDao().getById(id)
                             if (alarm != null) {
@@ -178,31 +202,31 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
 
                     ACTION_SNOOZE_ALARM -> {
                         AlarmForegroundService.stop(appContext)
+                        notifManager.cancelNotification(AlarmForegroundService.FOREGROUND_NOTIFICATION_ID)
+                        container?.clearActiveAlert()
                         if (id > 0) {
                             val snoozeMin = intent.getIntExtra(EXTRA_SNOOZE_MINUTES, 10)
-                            scheduler.scheduleSnoozedAlarm(id, snoozeMin)
-                            val alarm = db.alarmDao().getById(id)
-                            if (alarm != null) {
-                                db.alarmDao().insertHistory(
-                                    AlarmHistoryEntity(
-                                        alarmId = alarm.id,
-                                        label = alarm.label,
-                                        triggeredAtMillis = System.currentTimeMillis(),
-                                        action = "SNOOZED",
-                                    ),
-                                )
-                            }
+                            val alarmRepo = container?.alarmRepository
+                                ?: AlarmRepository(appContext, db.alarmDao(), prefsRepo, scheduler)
+                            alarmRepo.snoozeAlarm(id, snoozeMin)
                         }
                     }
 
                     ACTION_FIRE_TIMER -> if (id > 0) {
-                        val timerRepo = (appContext as? RRReminderApp)?.container?.timerRepository
-                        val finalized = timerRepo?.finalizeExpiredTimer(
+                        val timerRepo = container?.timerRepository
+                            ?: TimerRepository(appContext, db.timerDao(), scheduler)
+                        val finalized = timerRepo.finalizeExpiredTimer(
                             timerId = id,
                             nowMillis = System.currentTimeMillis(),
                             fromReceiver = true,
                         )
                         if (finalized != null) {
+                            container?.setActiveAlert(
+                                id = finalized.id,
+                                label = finalized.label,
+                                isTimer = true,
+                                snoozeMinutes = 10,
+                            )
                             val serviceIntent = Intent(appContext, AlarmForegroundService::class.java).apply {
                                 this.action = AlarmForegroundService.ACTION_START
                                 putExtra(AlarmForegroundService.EXTRA_ID, finalized.id)
@@ -223,11 +247,28 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                     sourceId = finalized.id,
                                 )
                             }
+                            runCatching {
+                                appContext.startActivity(
+                                    Intent(appContext, AlarmRingActivity::class.java).apply {
+                                        addFlags(
+                                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                                Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                                        )
+                                        putExtra(AlarmRingActivity.EXTRA_ID, finalized.id)
+                                        putExtra(AlarmRingActivity.EXTRA_LABEL, finalized.label)
+                                        putExtra(AlarmRingActivity.EXTRA_IS_TIMER, true)
+                                        putExtra(AlarmRingActivity.EXTRA_SNOOZE_MINUTES, 10)
+                                    },
+                                )
+                            }
                         }
                     }
 
                     ACTION_DISMISS_TIMER -> {
                         AlarmForegroundService.stop(appContext)
+                        notifManager.cancelNotification(AlarmForegroundService.FOREGROUND_NOTIFICATION_ID)
+                        container?.clearActiveAlert()
                     }
 
                     ACTION_FIRE_ROUTINE -> if (id > 0) {
@@ -241,7 +282,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
                                 sourceType = "ROUTINE",
                                 sourceId = routine.id,
                             )
-                            scheduler.scheduleRoutine(routine)
+                            scheduler.scheduleRoutine(routine, zoneId = activeZone)
                         }
                     }
                 }

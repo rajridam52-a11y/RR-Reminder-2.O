@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,6 +73,7 @@ fun TimerTabContent(
 
     var notifAllowed by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
     var exactAlarmAllowed by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+    var promptedNotifInSession by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -347,7 +349,8 @@ fun TimerTabContent(
                             leadingIcon = Icons.Rounded.PlayArrow,
                             colors = listOf(Color(0xFF7C3AED), Color(0xFF2563EB)),
                             onClick = {
-                                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                if (!notifAllowed && !promptedNotifInSession && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    promptedNotifInSession = true
                                     notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 }
                                 previewPresetMode = false
@@ -380,7 +383,10 @@ fun TimerTabContent(
                             ) {
                                 presets.forEach { preset ->
                                     AssistChip(
-                                        onClick = { onCreateTimer(preset.label, preset.durationMillis, false) },
+                                        onClick = {
+                                            previewPresetMode = false
+                                            onCreateTimer(preset.label, preset.durationMillis, false)
+                                        },
                                         label = { Text(preset.label, color = Color.White) },
                                         leadingIcon = {
                                             Icon(
@@ -537,9 +543,11 @@ fun TimerTabContent(
         CreateTimerDialog(
             onDismiss = { showCreateDialog = false },
             onCreate = { label, ms, repeat, saveAsPreset ->
-                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (!notifAllowed && !promptedNotifInSession && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    promptedNotifInSession = true
                     notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
+                previewPresetMode = false
                 onCreateTimer(label, ms, repeat)
                 if (saveAsPreset) onAddPreset(label, ms)
                 showCreateDialog = false

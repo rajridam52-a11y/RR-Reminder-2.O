@@ -181,6 +181,9 @@ fun WorldClockTabContent(
     }
 
     if (showAddSheet) {
+        val addedKeys = remember(cities) {
+            cities.map { "${it.zoneId}|${it.cityName.lowercase()}" }.toSet()
+        }
         AlertDialog(
             onDismissRequest = { showAddSheet = false },
             title = { Text("Add World Clock City") },
@@ -195,21 +198,40 @@ fun WorldClockTabContent(
                     Spacer(modifier = Modifier.height(8.dp))
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         items(availableToAdd) { opt ->
+                            val alreadyAdded = "${opt.zoneId}|${opt.cityName.lowercase()}" in addedKeys
+                            val optionTag = "worldclock_option_${opt.cityName.lowercase().replace(" ", "_")}"
                             TextButton(
                                 onClick = {
-                                    onAddCity(opt)
+                                    if (!alreadyAdded) {
+                                        onAddCity(opt)
+                                    }
                                     showAddSheet = false
                                     onZoneQueryChange("")
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag(optionTag),
                             ) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text(opt.cityName, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "${opt.countryName} (${opt.zoneId})",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(opt.cityName, style = MaterialTheme.typography.titleSmall)
+                                        Text(
+                                            "${opt.countryName} (${opt.zoneId})",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    if (alreadyAdded) {
+                                        Text(
+                                            text = "Added",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
                                 }
                             }
                         }

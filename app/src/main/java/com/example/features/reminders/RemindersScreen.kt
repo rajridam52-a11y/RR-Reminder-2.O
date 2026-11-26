@@ -21,9 +21,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -89,6 +91,7 @@ fun RemindersScreen(
 
     var notifAllowed by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
     var exactAlarmAllowed by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
+    var promptedNotifInSession by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -430,7 +433,8 @@ fun RemindersScreen(
             onCaptureLocation = onCaptureLocation,
             onDismiss = { showEditor = false },
             onSave = { saved ->
-                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (!notifAllowed && !promptedNotifInSession && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    promptedNotifInSession = true
                     notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
                 onSaveReminder(saved)
@@ -482,7 +486,7 @@ private fun ReminderRowCard(
         reminder.category.equals("Personal", ignoreCase = true) -> Icons.Rounded.CardGiftcard
         reminder.category.equals("Finance", ignoreCase = true) -> Icons.Rounded.ShoppingCart
         reminder.category.equals("Work", ignoreCase = true) -> Icons.Rounded.Groups
-        else -> Icons.Rounded.MenuBook
+        else -> Icons.AutoMirrored.Rounded.MenuBook
     }
 
     var showSnoozeMenu by remember { mutableStateOf(false) }
@@ -739,6 +743,7 @@ private fun ReminderEditorDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .imePadding()
                     .heightIn(max = 470.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),

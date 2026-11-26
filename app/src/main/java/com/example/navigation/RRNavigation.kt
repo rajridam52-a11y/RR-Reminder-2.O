@@ -192,7 +192,7 @@ fun RRAppRoot(
 
     val uid = signedInUser.uid
     key(uid) {
-        val mainViewModel: MainViewModel = viewModel(key = uid, factory = MainViewModel.Factory(container))
+        val mainViewModel: MainViewModel = viewModel(key = "main_$uid", factory = MainViewModel.Factory(container))
         val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
 
         if (!preferences.onboardingCompleted) {
@@ -231,18 +231,19 @@ private fun RRMainShell(
     val scope = rememberCoroutineScope()
     val extra = LocalRRExtraColors.current
 
-    val remindersVm: RemindersViewModel = viewModel(key = uid, factory = RemindersViewModel.Factory(container))
-    val alarmsVm: AlarmsViewModel = viewModel(key = uid, factory = AlarmsViewModel.Factory(container))
-    val weatherClockVm: WeatherWorldClockViewModel = viewModel(key = uid, factory = WeatherWorldClockViewModel.Factory(container))
-    val timerSwVm: TimerStopwatchViewModel = viewModel(key = uid, factory = TimerStopwatchViewModel.Factory(container))
-    val prodVm: ProductivityViewModel = viewModel(key = uid, factory = ProductivityViewModel.Factory(container))
-    val settingsVm: SettingsViewModel = viewModel(key = uid, factory = SettingsViewModel.Factory(container))
-    val healthVm: SystemHealthViewModel = viewModel(key = uid, factory = SystemHealthViewModel.Factory(container))
+    val remindersVm: RemindersViewModel = viewModel(key = "reminders_$uid", factory = RemindersViewModel.Factory(container))
+    val alarmsVm: AlarmsViewModel = viewModel(key = "alarms_$uid", factory = AlarmsViewModel.Factory(container))
+    val weatherClockVm: WeatherWorldClockViewModel = viewModel(key = "weather_clock_$uid", factory = WeatherWorldClockViewModel.Factory(container))
+    val timerSwVm: TimerStopwatchViewModel = viewModel(key = "timer_sw_$uid", factory = TimerStopwatchViewModel.Factory(container))
+    val prodVm: ProductivityViewModel = viewModel(key = "productivity_$uid", factory = ProductivityViewModel.Factory(container))
+    val settingsVm: SettingsViewModel = viewModel(key = "settings_$uid", factory = SettingsViewModel.Factory(container))
+    val healthVm: SystemHealthViewModel = viewModel(key = "health_$uid", factory = SystemHealthViewModel.Factory(container))
 
     val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
     val remoteConfig by mainViewModel.remoteConfig.collectAsStateWithLifecycle()
     val homeState by mainViewModel.homeState.collectAsStateWithLifecycle()
     val liveNowMillis by mainViewModel.nowMillis.collectAsStateWithLifecycle()
+    val homeTimerTick by timerSwVm.timerTickNow.collectAsStateWithLifecycle()
     val timeSyncStatus by mainViewModel.timeSyncStatus.collectAsStateWithLifecycle()
     val activeRingAlert by container.activeRingAlert.collectAsStateWithLifecycle()
     val isOwnerAccount = isOwnerUser(currentUser.email, currentUser.isEmailVerified)
@@ -381,6 +382,7 @@ private fun RRMainShell(
                                 HomeDashboardScreen(
                                     homeState = homeState,
                                     liveNowMillis = liveNowMillis,
+                                    timerTickNowMillis = homeTimerTick,
                                     preferences = preferences,
                                     globalConfig = remoteConfig,
                                     timeSyncStatus = timeSyncStatus,
@@ -440,12 +442,8 @@ private fun RRMainShell(
                                     onPauseTimer = timerSwVm::pauseTimer,
                                     onResumeTimer = timerSwVm::resumeTimer,
                                     onResetTimer = timerSwVm::resetTimer,
-                                    onQuickSaveReminder = { rem: ReminderEntity ->
-                                        scope.launch { container.reminderRepository.saveReminder(rem) }
-                                    },
-                                    onQuickSaveTask = { task: TaskEntity ->
-                                        scope.launch { container.taskRepository.saveTask(task, emptyList()) }
-                                    },
+                                    onQuickSaveReminder = mainViewModel::quickSaveReminder,
+                                    onQuickSaveTask = mainViewModel::quickSaveTask,
                                     onMoveWidget = mainViewModel::moveDashboardWidget,
                                     onToggleWidgetVisibility = mainViewModel::toggleDashboardWidgetVisibility,
                                     onResetDashboard = mainViewModel::resetDashboardLayout,

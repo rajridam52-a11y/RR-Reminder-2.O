@@ -377,6 +377,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.alarmRepository.toggleAlarm(alarm, enabled) }
     }
 
+    fun quickSaveReminder(reminder: ReminderEntity) {
+        viewModelScope.launch { container.reminderRepository.saveReminder(reminder) }
+    }
+
+    fun quickSaveTask(task: TaskEntity) {
+        viewModelScope.launch { container.taskRepository.saveTask(task, emptyList()) }
+    }
+
     fun markAllNotificationsRead() {
         viewModelScope.launch { container.database.notificationLogDao().markAllRead() }
     }

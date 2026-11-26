@@ -68,6 +68,7 @@ import java.util.Locale
 fun HomeDashboardScreen(
     homeState: HomeUiState,
     liveNowMillis: Long = homeState.nowMillis,
+    timerTickNowMillis: Long = liveNowMillis,
     preferences: UserPreferences,
     globalConfig: GlobalAppConfig? = null,
     timeSyncStatus: NetworkTimeSyncStatus = NetworkTimeSyncStatus(),
@@ -899,7 +900,7 @@ fun HomeDashboardScreen(
                             item(key = "widget_active_timers") {
                                 ActiveTimersDashboardCard(
                                     timers = homeState.activeTimers,
-                                    nowMillis = liveNowMillis,
+                                    nowMillis = timerTickNowMillis,
                                     onClick = onNavigateTimer,
                                     onPauseTimer = onPauseTimer,
                                     onResumeTimer = onResumeTimer,

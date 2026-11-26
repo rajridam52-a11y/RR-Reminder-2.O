@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +80,7 @@ fun AlarmsTabContent(
     var exactAlarmAllowed by remember { mutableStateOf(PermissionHelper.canScheduleExactAlarms(context)) }
     var notifAllowed by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
     var fullScreenAllowed by remember { mutableStateOf(PermissionHelper.canUseFullScreenIntent(context)) }
+    var promptedNotifInSession by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -344,7 +346,8 @@ fun AlarmsTabContent(
                                         Switch(
                                             checked = alarm.isEnabled,
                                             onCheckedChange = { enable ->
-                                                if (enable && !notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                if (enable && !notifAllowed && !promptedNotifInSession && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                    promptedNotifInSession = true
                                                     notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                                 }
                                                 onToggleAlarm(alarm, enable)
@@ -494,7 +497,8 @@ fun AlarmsTabContent(
             preferences = preferences,
             onDismiss = { showEditor = false },
             onSave = { saved ->
-                if (!notifAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (!notifAllowed && !promptedNotifInSession && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    promptedNotifInSession = true
                     notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
                 onSaveAlarm(saved)
@@ -583,8 +587,10 @@ private fun AlarmEditorDialog(
             tonalElevation = 6.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .widthIn(max = 520.dp),
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .widthIn(max = 520.dp)
+                .heightIn(max = 660.dp),
         ) {
             Column(
                 modifier = Modifier
@@ -612,7 +618,7 @@ private fun AlarmEditorDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 460.dp)
+                        .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,

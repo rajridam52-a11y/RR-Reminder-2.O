@@ -5,6 +5,7 @@ import com.example.core.database.ReminderEntity
 import com.example.core.database.RepeatType
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -135,9 +136,9 @@ object ScheduleCalculator {
     }
 
     fun formatHourMinute(hour: Int, minute: Int, use24Hour: Boolean): String {
-        val zdt = ZonedDateTime.now().withHour(hour.coerceIn(0, 23)).withMinute(minute.coerceIn(0, 59))
+        val localTime = LocalTime.of(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
         val pattern = if (use24Hour) "HH:mm" else "h:mm a"
-        return zdt.format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault()))
+        return localTime.format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault()))
     }
 
     fun formatDate(millis: Long, pattern: String = "MMM d, yyyy", zoneId: ZoneId = ZoneId.systemDefault()): String {

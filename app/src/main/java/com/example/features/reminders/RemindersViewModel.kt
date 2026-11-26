@@ -35,12 +35,10 @@ class RemindersViewModel(private val container: AppContainer) : ViewModel() {
     private val _selectedCategory = MutableStateFlow("All")
     val selectedCategory: StateFlow<String> = _selectedCategory.asStateFlow()
 
-    private val tickerFlow: Flow<Long> = flow {
-        while (true) {
-            emit(System.currentTimeMillis())
-            delay(15_000L)
-        }
-    }
+    private val tickerFlow: Flow<Long> = container.sharedNowMillis
+        .map { it / 15_000L }
+        .distinctUntilChanged()
+        .map { container.networkTimeProvider.currentEpochMillis() }
 
     val allReminders: StateFlow<List<ReminderEntity>> = container.reminderRepository.reminders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

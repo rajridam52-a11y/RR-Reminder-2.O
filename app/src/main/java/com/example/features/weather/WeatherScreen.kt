@@ -472,9 +472,7 @@ fun WeatherScreen(
                                     SmallTelemetryTag("UV", "${String.format(Locale.US, "%.1f", cache.uvIndex)} ${WeatherUnits.describeUv(cache.uvIndex)}")
                                     SmallTelemetryTag("Pressure", if (cache.pressureHpa > 0) "${cache.pressureHpa.toInt()} hPa" else "--")
                                     SmallTelemetryTag("Vis", WeatherUnits.formatVisibility(cache.visibilityMeters, preferences.useMph))
-                                    if (cache.windDirectionDeg != null) {
-                                        SmallTelemetryTag("Dir", WeatherUnits.degreesToCompass(cache.windDirectionDeg))
-                                    }
+                                    SmallTelemetryTag("Dir", WeatherUnits.degreesToCompass(cache.windDirectionDeg))
                                 }
                                 if (cache.sunriseIso.isNotBlank() && cache.sunsetIso.isNotBlank()) {
                                     HorizontalDivider(color = Color(0x2293C5FD))

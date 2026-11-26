@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -644,7 +645,7 @@ fun SettingsScreen(
                 // Screen 11 Row 3: Sound & Vibration
                 item {
                     SettingsSectionCard(
-                        icon = Icons.Rounded.VolumeUp,
+                        icon = Icons.AutoMirrored.Rounded.VolumeUp,
                         iconColor = Color(0xFFF59E0B),
                         title = "Sound & Vibration",
                         subtitle = "$soundTitle • Snooze ${preferences.defaultAlarmSnoozeMinutes}m",

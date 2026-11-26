@@ -235,12 +235,16 @@ class WeatherWorldClockViewModel(private val container: AppContainer) : ViewMode
                         sortOrder = existing.size,
                     ),
                 )
+                container.refreshWidgets()
             }
         }
     }
 
     fun removeWorldCity(id: Long) {
-        viewModelScope.launch { container.database.worldClockDao().deleteCityById(id) }
+        viewModelScope.launch {
+            container.database.worldClockDao().deleteCityById(id)
+            container.refreshWidgets()
+        }
     }
 
     private data class Tuple5<A, B, C, D, E>(

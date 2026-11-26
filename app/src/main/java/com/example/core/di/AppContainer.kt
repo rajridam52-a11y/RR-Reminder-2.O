@@ -26,6 +26,7 @@ import com.example.core.notifications.RRNotificationManager
 import com.example.core.notifications.ReminderAlarmScheduler
 import com.example.data.*
 import com.example.features.alarms.AlarmRingActivity
+import com.example.widgets.WidgetUpdateHelper
 import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -269,6 +270,10 @@ class AppContainer(context: Context) {
     suspend fun syncClockAndEmit() {
         runCatching { networkTimeProvider.syncNow() }
         emitClockTick()
+    }
+
+    fun refreshWidgets() {
+        WidgetUpdateHelper.updateAllWidgets(appContext)
     }
 
     val systemHealthChecker: SystemHealthChecker by lazy {
